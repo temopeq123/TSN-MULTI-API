@@ -283,8 +283,8 @@ namespace TSN_MULTI_API
                 string saveDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"Госключ_{selectedOrder.OrderId}");
                 Directory.CreateDirectory(saveDir);
 
-                // Исходные имена файлов СТРОГО как они отправлялись
-                var originalFiles = new List<string> { selectedOrder.FileName, "req.xml" };
+                // Запрашиваем из Госключа только те документы, которые пользователь реально подписывал
+                var originalFiles = new List<string> { selectedOrder.FileName };
 
                 foreach (string baseFileName in originalFiles)
                 {
