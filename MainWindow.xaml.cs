@@ -253,7 +253,7 @@ namespace TSN_MULTI_API
         {
             if (OrdersListView.SelectedItem is not OrderRecord selectedOrder)
             {
-                MessageBox.Show("Выберите заявление из таблицы!");
+                MessageBox.Show("Выберите заявку в списке!");
                 return;
             }
 
@@ -264,46 +264,62 @@ namespace TSN_MULTI_API
             try
             {
                 Log($"Скачивание подписанных файлов для Order ID: {selectedOrder.OrderId}...");
-                if (string.IsNullOrEmpty(token)) token = await _authManager.GetAccessTokenAsync(apiKey, thumbprint);
+
+                if (string.IsNullOrEmpty(token))
+                    token = await _authManager.GetAccessTokenAsync(apiKey, thumbprint);
+
                 await RefreshOrderStatusAsync(selectedOrder, token);
 
-                if (!IsDocumentsSigned(selectedOrder.StatusName) || !selectedOrder.HasResult)
+                if (!IsDocumentsSigned(selectedOrder.StatusName))
                 {
                     MessageBox.Show(
-                        "Файлы результата доступны только после статуса «Документы подписаны» и появления результата.\n" +
-                        "Текущий статус: " + selectedOrder.StatusName + FormatStateCode(selectedOrder.StateOrgStatusCode),
-                        "Результат ещё недоступен",
+                        "Документы еще не подписаны.\nТекущий статус: " + selectedOrder.StatusName,
+                        "Внимание",
                         MessageBoxButton.OK,
                         MessageBoxImage.Warning);
                     return;
                 }
 
-                if (selectedOrder.CurrentStatusHistoryId == 0 || selectedOrder.ResultFileNames.Count == 0)
-                    throw new Exception("ЕПГУ сообщил о подписании, но не вернул идентификатор статуса или имена файлов результата.");
-
                 string saveDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"Госключ_{selectedOrder.OrderId}");
                 Directory.CreateDirectory(saveDir);
 
-                foreach (string resultFileName in selectedOrder.ResultFileNames)
+                // Запрашиваем из Госключа только те документы, которые пользователь реально подписывал
+                var originalFiles = new List<string> { selectedOrder.FileName };
+
+                foreach (string baseFileName in originalFiles)
                 {
-                    string safeFileName = Path.GetFileName(resultFileName);
-                    if (string.IsNullOrWhiteSpace(safeFileName))
+                    if (string.IsNullOrWhiteSpace(baseFileName))
                         continue;
 
-                    await _apiClient.DownloadResultFileAsync(
-                        selectedOrder.CurrentStatusHistoryId,
-                        safeFileName,
-                        token,
-                        Path.Combine(saveDir, safeFileName));
+                    // На диск сохраняем с расширением .sig
+                    string savePath = Path.Combine(saveDir, baseFileName + ".sig");
+
+                    try
+                    {
+                        // СТРОГО ПО СПЕЦИФИКАЦИИ: 
+                        // 1. Используем CurrentStatusHistoryId
+                        // 2. Передаем оригинальное имя файла (baseFileName) без .sig
+                        await _apiClient.DownloadResultFileAsync(
+                            selectedOrder.CurrentStatusHistoryId,
+                            baseFileName,
+                            token,
+                            savePath);
+
+                        Log($"Успешно скачан файл подписи: {baseFileName}.sig");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Не удалось скачать подпись для {baseFileName}: {ex.Message}");
+                    }
                 }
 
-                Log($"Файлы успешно скачаны в папку: {saveDir}");
-                MessageBox.Show($"Файлы успешно скачаны!\nПуть: {saveDir}", "Готово", MessageBoxButton.OK, MessageBoxImage.Information);
+                Log($"Скачивание завершено. Папка: {saveDir}");
+                MessageBox.Show($"Файлы подписей сохранены в папку:\n{saveDir}", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                Log($"Ошибка скачивания: {ex.Message}");
-                MessageBox.Show($"Не удалось скачать файлы. Убедитесь, что статус 'Документы подписаны'.\nОшибка: {ex.Message}", "Внимание", MessageBoxButton.OK, MessageBoxImage.Warning);
+                Log($"Ошибка: {ex.Message}");
+                MessageBox.Show($"Произошла ошибка при скачивании.\nДетали: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -314,35 +330,18 @@ namespace TSN_MULTI_API
 
             if (doc.RootElement.TryGetProperty("order", out var orderProp))
             {
-                string? orderStr = orderProp.GetString();
-                if (!string.IsNullOrWhiteSpace(orderStr))
+                if (orderProp.ValueKind == JsonValueKind.String)
                 {
-                    using var orderDoc = JsonDocument.Parse(orderStr);
-                    if (orderDoc.RootElement.TryGetProperty("orderStatusName", out var statusNameProp))
-                        order.StatusName = statusNameProp.GetString() ?? "Неизвестно";
-
-                    if (orderDoc.RootElement.TryGetProperty("stateOrgStatusCode", out var stateCodeProp))
-                        order.StateOrgStatusCode = stateCodeProp.GetString() ?? string.Empty;
-
-                    if (orderDoc.RootElement.TryGetProperty("currentStatusHistoryId", out var histIdProp) &&
-                        histIdProp.ValueKind == JsonValueKind.Number)
-                        order.CurrentStatusHistoryId = histIdProp.GetInt64();
-
-                    if (orderDoc.TryGetProperty("hasResult", out var hasResultProp) &&
-                        (hasResultProp.ValueKind is JsonValueKind.True or JsonValueKind.False))
-                        order.HasResult = hasResultProp.GetBoolean();
-
-                    if (orderDoc.TryGetProperty("orderResponseFiles", out var responseFilesProp) &&
-                        responseFilesProp.ValueKind == JsonValueKind.Array)
+                    string? orderStr = orderProp.GetString();
+                    if (!string.IsNullOrWhiteSpace(orderStr))
                     {
-                        order.ResultFileNames = responseFilesProp
-                            .EnumerateArray()
-                            .Where(file => file.TryGetProperty("fileName", out var fileNameProp) &&
-                                           !string.IsNullOrWhiteSpace(fileNameProp.GetString()))
-                            .Select(file => file.GetProperty("fileName").GetString()!)
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                            .ToList();
+                        using var orderDoc = JsonDocument.Parse(orderStr);
+                        ApplyOrderDetails(order, orderDoc.RootElement);
                     }
+                }
+                else if (orderProp.ValueKind == JsonValueKind.Object)
+                {
+                    ApplyOrderDetails(order, orderProp);
                 }
             }
 
@@ -360,8 +359,71 @@ namespace TSN_MULTI_API
             {
                 Log(
                     "Статус заявки: " + order.StatusName + FormatStateCode(order.StateOrgStatusCode) +
-                    $"; ID истории: {order.CurrentStatusHistoryId}; результат: {(order.HasResult ? order.ResultFileNames.Count : 0)} файл(ов).");
+                    $"; ID истории: {order.CurrentStatusHistoryId}; результат: {(order.HasResult ? order.ResultFiles.Count : 0)} файл(ов).");
             }
+        }
+
+        private static void ApplyOrderDetails(OrderRecord order, JsonElement orderElement)
+        {
+            if (orderElement.TryGetProperty("orderStatusName", out var statusNameProp))
+                order.StatusName = statusNameProp.GetString() ?? "Неизвестно";
+
+            if (orderElement.TryGetProperty("stateOrgStatusCode", out var stateCodeProp))
+                order.StateOrgStatusCode = stateCodeProp.GetString() ?? string.Empty;
+
+            if (orderElement.TryGetProperty("currentStatusHistoryId", out var histIdProp) &&
+                histIdProp.ValueKind == JsonValueKind.Number)
+                order.CurrentStatusHistoryId = histIdProp.GetInt64();
+
+            if (orderElement.TryGetProperty("hasResult", out var hasResultProp) &&
+                hasResultProp.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                order.HasResult = hasResultProp.GetBoolean();
+
+            if (orderElement.TryGetProperty("orderResponseFiles", out var responseFilesProp) &&
+                responseFilesProp.ValueKind == JsonValueKind.Array)
+            {
+                order.ResultFiles = responseFilesProp
+                    .EnumerateArray()
+                    .Select(ParseResultFile)
+                    .Where(file => file is not null)
+                    .Cast<ResultFileInfo>()
+                    .GroupBy(file => file.Link, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.First())
+                    .ToList();
+            }
+        }
+
+        private static ResultFileInfo? ParseResultFile(JsonElement file)
+        {
+            if (!file.TryGetProperty("link", out var linkProp))
+                return null;
+
+            string? link = linkProp.GetString();
+            if (string.IsNullOrWhiteSpace(link))
+                return null;
+
+            string fileName = string.Empty;
+            if (file.TryGetProperty("fileName", out var fileNameProp))
+                fileName = fileNameProp.GetString() ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                try
+                {
+                    (string mnemonic, _) = ApiClient.ParseAttachmentLink(link);
+                    fileName = mnemonic;
+                }
+                catch
+                {
+                    fileName = "result";
+                }
+            }
+
+            return new ResultFileInfo
+            {
+                FileName = fileName,
+                Link = link
+            };
         }
 
         private static string FormatStateCode(string? stateCode) =>
@@ -375,6 +437,13 @@ namespace TSN_MULTI_API
              statusName.Contains("истек", StringComparison.OrdinalIgnoreCase));
 
         private static bool IsDocumentsSigned(string? statusName) =>
-            string.Equals(statusName?.Trim(), "Документы подписаны", StringComparison.OrdinalIgnoreCase);
+            !string.IsNullOrWhiteSpace(statusName) &&
+            statusName.Contains("подписан", StringComparison.OrdinalIgnoreCase) &&
+            !IsDeliveryFailure(statusName);
+
+        // Overload accepting stateOrgStatusCode for cases when API returns status code instead of human-friendly text
+        private static bool IsDocumentsSigned(string? statusName, string? stateOrgStatusCode) =>
+            (!string.IsNullOrWhiteSpace(stateOrgStatusCode) && stateOrgStatusCode.Contains("SIGNED", StringComparison.OrdinalIgnoreCase))
+            || IsDocumentsSigned(statusName);
     }
 }

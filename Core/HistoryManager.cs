@@ -16,8 +16,14 @@ namespace TSN_MULTI_API.Core
         public string StateOrgStatusCode { get; set; } = string.Empty;
         public long CurrentStatusHistoryId { get; set; }
         public bool HasResult { get; set; }
-        public List<string> ResultFileNames { get; set; } = new();
+        public List<ResultFileInfo> ResultFiles { get; set; } = new();
         public bool IsCompleted { get; set; }
+    }
+
+    public class ResultFileInfo
+    {
+        public string FileName { get; set; } = string.Empty;
+        public string Link { get; set; } = string.Empty;
     }
 
     public static class HistoryManager

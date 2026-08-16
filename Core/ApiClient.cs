@@ -63,27 +63,98 @@ namespace TSN_MULTI_API.Core
             return responseJson;
         }
 
-        public async Task DownloadResultFileAsync(long currentStatusHistoryId, string mnemonic, string accessToken, string savePath)
+        public static (string Mnemonic, string ObjectType) ParseAttachmentLink(string link)
         {
-            // Обязательно кодируем имя файла (mnemonic), чтобы точки и спецсимволы не ломали URL
-            string encodedMnemonic = Uri.EscapeDataString(mnemonic);
-
-            string relativeUrl = $"files/download/{currentStatusHistoryId}/3?mnemonic={encodedMnemonic}&eserviceCode=10000000374";
-            string fullUrl = new Uri(new Uri(ApiEpguBaseUrl), relativeUrl).ToString();
-
-            using var request = new HttpRequestMessage(HttpMethod.Get, fullUrl);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-
-            HttpResponseMessage response = await _httpClient.SendAsync(request);
-
-            if (!response.IsSuccessStatusCode)
+            if (!Uri.TryCreate(link, UriKind.Absolute, out Uri? uri) ||
+                !string.Equals(uri.Scheme, "terrabyte", StringComparison.OrdinalIgnoreCase))
             {
-                string errorContent = await response.Content.ReadAsStringAsync();
-                throw new Exception($"Ошибка скачивания файла ({response.StatusCode}): {errorContent}");
+                throw new ArgumentException($"Некорректная ссылка на файл результата: {link}");
             }
 
-            byte[] fileBytes = await response.Content.ReadAsByteArrayAsync();
-            File.WriteAllBytes(savePath, fileBytes);
+            string[] parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2)
+                throw new ArgumentException($"Некорректная ссылка на файл результата: {link}");
+
+            string mnemonic = parts[^2];
+            string objectType = parts[^1];
+            if (string.IsNullOrWhiteSpace(mnemonic) || string.IsNullOrWhiteSpace(objectType))
+                throw new ArgumentException($"Некорректная ссылка на файл результата: {link}");
+
+            return (mnemonic, objectType);
+        }
+
+        public async Task DownloadResultFileAsync(long currentStatusHistoryId, string fileName, string token, string savePath)
+        {
+            // Очищаем токен от случайного префикса "Bearer ", если он есть
+            if (token.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                token = token.Substring(7).Trim();
+            }
+
+            string escapedFileName = Uri.EscapeDataString(fileName);
+            string baseUrl = ApiEpguBaseUrl.TrimEnd('/');
+            string url = $"{baseUrl}/files/download/{currentStatusHistoryId}/3?mnemonic={escapedFileName}&eserviceCode=10000000374";
+
+            // 1. Отключаем авто-редирект, чтобы управлять заголовками вручную
+            using var handler = new HttpClientHandler { AllowAutoRedirect = false };
+            using var downloadClient = new HttpClient(handler);
+
+            if (_httpClient.BaseAddress != null)
+            {
+                downloadClient.BaseAddress = _httpClient.BaseAddress;
+            }
+
+            // 2. Копируем все базовые заголовки (API-Key и прочие), КРОМЕ Authorization
+            foreach (var header in _httpClient.DefaultRequestHeaders)
+            {
+                if (header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                downloadClient.DefaultRequestHeaders.TryAddWithoutValidation(header.Key, header.Value);
+            }
+
+            // ШАГ 1: Запрос к API ЕПГУ
+            using var request1 = new HttpRequestMessage(HttpMethod.Get, url);
+            request1.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            using var response1 = await downloadClient.SendAsync(request1, HttpCompletionOption.ResponseHeadersRead);
+            HttpResponseMessage finalResponse = response1;
+
+            // ШАГ 2: Ловим редирект (302) во внутреннее файловое хранилище (/api/storage)
+            if ((int)response1.StatusCode >= 300 && (int)response1.StatusCode < 400 && response1.Headers.Location != null)
+            {
+                Uri redirectUri = response1.Headers.Location;
+                if (!redirectUri.IsAbsoluteUri)
+                {
+                    Uri baseHost = _httpClient.BaseAddress ?? new Uri(baseUrl);
+                    redirectUri = new Uri(baseHost, redirectUri);
+                }
+
+                using var request2 = new HttpRequestMessage(HttpMethod.Get, redirectUri);
+
+                // КРИТИЧНО 1: ВОЗВРАЩАЕМ ТОКЕН! Внутреннее хранилище ЕПГУ требует авторизации.
+                request2.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+                // КРИТИЧНО 2: Передаем Cookies (балансировщик ЕПГУ часто выдает их в 302 ответе)
+                if (response1.Headers.TryGetValues("Set-Cookie", out var setCookies))
+                {
+                    var cookiesToPass = string.Join("; ", setCookies.Select(c => c.Split(';')[0]));
+                    request2.Headers.Add("Cookie", cookiesToPass);
+                }
+
+                finalResponse = await downloadClient.SendAsync(request2, HttpCompletionOption.ResponseHeadersRead);
+            }
+
+            // Проверяем итоговый результат
+            if (!finalResponse.IsSuccessStatusCode)
+            {
+                string errorContent = await finalResponse.Content.ReadAsStringAsync();
+                string step = finalResponse == response1 ? "Шаг 1 (API)" : "Шаг 2 (Хранилище)";
+                throw new Exception($"{step}: Код {(int)finalResponse.StatusCode}. URL: {finalResponse.RequestMessage?.RequestUri}. Ответ: {errorContent}");
+            }
+
+            // Сохраняем файл
+            using var fileStream = new FileStream(savePath, FileMode.Create, FileAccess.Write, FileShare.None);
+            await finalResponse.Content.CopyToAsync(fileStream);
         }
     }
 }
