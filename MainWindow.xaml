@@ -1,7 +1,21 @@
 ﻿<Window x:Class="TSN_MULTI_API.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="TSN MULTI API - Госключ (История)" Height="750" Width="1000" WindowStartupLocation="CenterScreen">
+        Title="TSN MULTI API - Платформа интеграции" Height="850" Width="1050" WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+        <Style x:Key="HiddenTabs" TargetType="TabControl">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="TabItem">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
 
     <Grid Margin="15">
         <Grid.ColumnDefinitions>
@@ -9,54 +23,66 @@
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Левое меню -->
-        <Border Grid.Column="0" Background="#FF2D2D30" Margin="0,0,15,0">
+        <Border Grid.Column="0" Background="#FF2D2D30" Margin="0,0,15,0" CornerRadius="5">
             <StackPanel Margin="10,20,10,10">
-                <TextBlock Text="Меню" Foreground="White" FontWeight="Bold" Margin="0,0,0,10"/>
-                <Button Content="Госключ" Height="35" Margin="0,0,0,5" Background="#FF3F3F46" Foreground="White"/>
+                <TextBlock Text="МОДУЛИ" Foreground="#FF888888" FontWeight="Bold" Margin="0,0,0,10" FontSize="11" HorizontalAlignment="Center"/>
+                <Button Content="Госключ" Height="35" Margin="0,0,0,8" Background="#FF3F3F46" Foreground="White" Click="MenuGoskluch_Click" Cursor="Hand"/>
+                <Button Content="ФССП (API ЕПГУ)" Height="35" Margin="0,0,0,8" Background="#FF3F3F46" Foreground="White" Click="MenuFssp_Click" Cursor="Hand"/>
             </StackPanel>
         </Border>
 
-        <!-- Основная рабочая область -->
         <Grid Grid.Column="1">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <TextBlock x:Name="TxtHeader" Text="Госключ - Управление и История" FontSize="20" FontWeight="Bold" Margin="0,0,0,10"/>
+            <TextBlock x:Name="TxtHeader" Grid.Row="0" Text="Отправка документов (Госключ)" FontSize="22" FontWeight="Bold" Foreground="#FF333333" Margin="0,0,0,15"/>
 
-            <!-- ПАНЕЛЬ ГОСКЛЮЧ -->
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                <StackPanel>
-                    <!-- Настройки ЭП и Отладка -->
-                    <GroupBox Header="Параметры подключения" Padding="10" Margin="0,0,0,10">
-                        <StackPanel>
-                            <TextBlock Text="Сертификат ЭП:" Margin="0,0,0,3"/>
-                            <Grid Margin="0,0,0,8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <ComboBox x:Name="CertComboBox" Grid.Column="0" DisplayMemberPath="SubjectName" SelectedValuePath="Thumbprint"/>
-                                <Button Content="Свойства" Grid.Column="1" Width="75" Margin="8,0,0,0" Click="BtnCertProperties_Click"/>
-                                <Button Content="Обновить" Grid.Column="2" Width="75" Margin="8,0,0,0" Click="RefreshCerts_Click"/>
-                            </Grid>
+            <Expander Grid.Row="1" Header="Параметры подключения (Сертификаты и Токены)" IsExpanded="True" Margin="0,0,0,15" FontWeight="SemiBold">
+                <Border Background="#FFF9F9F9" BorderBrush="#FFDDDDDD" BorderThickness="1" Margin="0,5,0,0" Padding="10">
+                    <StackPanel TextElement.FontWeight="Normal">
+                        <TextBlock Text="Сертификат ЭП:" Margin="0,0,0,3"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ComboBox x:Name="CertComboBox" Grid.Column="0" DisplayMemberPath="SubjectName" SelectedValuePath="Thumbprint"/>
+                            <Button Content="Свойства" Grid.Column="1" Width="75" Margin="8,0,0,0" Click="BtnCertProperties_Click"/>
+                            <Button Content="Обновить" Grid.Column="2" Width="75" Margin="8,0,0,0" Click="RefreshCerts_Click"/>
+                        </Grid>
 
-                            <TextBlock Text="API-Key (UUID):" FontWeight="SemiBold" Margin="0,0,0,2"/>
-                            <TextBox x:Name="TxtApiKeyBox" Height="25" Margin="0,0,0,8" Text="60904342-e040-4180-b037-e55d313c6d3a"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="15"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="API-Key (UUID):" FontWeight="SemiBold" Margin="0,0,0,2"/>
+                                <TextBox x:Name="TxtApiKeyBox" Height="25" Text="60904342-e040-4180-b037-e55d313c6d3a"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Access Token (Ручной ввод):" FontWeight="SemiBold" Margin="0,0,0,2"/>
+                                <TextBox x:Name="TxtManualTokenBox" Height="25"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+            </Expander>
 
-                            <TextBlock Text="Access Token (из Postman или авто):" FontWeight="SemiBold" Margin="0,0,0,2"/>
-                            <TextBox x:Name="TxtManualTokenBox" Height="25" Margin="0,0,0,5"/>
-                        </StackPanel>
-                    </GroupBox>
+            <TabControl x:Name="MainTabControl" Grid.Row="2" Style="{StaticResource HiddenTabs}" Margin="0,0,0,15">
 
-                    <!-- Отправка нового документа -->
-                    <GroupBox Header="Новая отправка" Padding="10" Margin="0,0,0,10">
+                <TabItem>
+                    <GroupBox Header="Формирование пакета для Госключа" Padding="15" BorderBrush="#FF0078D7">
                         <StackPanel>
                             <TextBlock Text="Документ (PDF):" FontWeight="Bold"/>
-                            <Grid Margin="0,3,0,8">
+                            <Grid Margin="0,3,0,12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
@@ -66,45 +92,87 @@
                             </Grid>
 
                             <TextBlock Text="СНИЛС получателя:" FontWeight="Bold"/>
-                            <TextBox x:Name="TxtSnils" Height="25" Margin="0,3,0,8" MaxLength="14" TextChanged="TxtSnils_TextChanged"/>
+                            <TextBox x:Name="TxtSnils" Height="25" Margin="0,3,0,12" MaxLength="14" TextChanged="TxtSnils_TextChanged"/>
 
                             <TextBlock Text="Описание:" FontWeight="Bold"/>
-                            <TextBox x:Name="TxtDescription" Height="25" Margin="0,3,0,12" Text="Членская книжка ТСН Сапожок"/>
+                            <TextBox x:Name="TxtDescription" Height="25" Margin="0,3,0,15" Text="Членская книжка ТСН Сапожок"/>
 
-                            <Button Content="Передать заявку в Госключ" Width="220" Height="35" HorizontalAlignment="Left" Click="PushArchiveSmartAsync_Click"/>
+                            <Button Content="Отправить в Госключ" Width="220" Height="38" HorizontalAlignment="Left" Click="PushArchiveSmartAsync_Click" Background="#FF0078D7" Foreground="White" FontWeight="Bold" Cursor="Hand"/>
                         </StackPanel>
                     </GroupBox>
+                </TabItem>
 
-                    <!-- ИСТОРИЯ ЗАЯВЛЕНИЙ И СКАЧИВАНИЕ -->
-                    <GroupBox Header="История заявлений (Автосохранение)" Padding="10" Margin="0,0,0,10">
+                <TabItem>
+                    <GroupBox Header="Взаимодействие с ФССП (API ЕПГУ)" Padding="15" BorderBrush="#FF28A745">
                         <StackPanel>
-                            <TextBlock Text="Заявка считается доставленной только после успешного статуса Госключа. По отказанной заявке результат недоступен." FontSize="11" Foreground="Gray" Margin="0,0,0,8"/>
+                            <TextBlock Text="Вид запроса к приставам:" FontWeight="Bold" Margin="0,0,0,3"/>
+                            <ComboBox x:Name="CmbFsspService" SelectedIndex="0" Margin="0,0,0,12" Height="27">
+                                <ComboBoxItem Content="Проверка наличия ИП (60010153)" Tag="60010153"/>
+                                <ComboBoxItem Content="Ход исполнительного производства (10000000352)" Tag="10000000352"/>
+                                <ComboBoxItem Content="Подача ходатайств и жалоб (10000000367)" Tag="10000000367"/>
+                            </ComboBox>
 
-                            <ListView x:Name="OrdersListView" Height="160" Margin="0,0,0,8">
-                                <ListView.View>
-                                    <GridView>
-                                        <GridViewColumn Header="Order ID" Width="90" DisplayMemberBinding="{Binding OrderId}"/>
-                                        <GridViewColumn Header="Файл" Width="140" DisplayMemberBinding="{Binding FileName}"/>
-                                        <GridViewColumn Header="СНИЛС" Width="100" DisplayMemberBinding="{Binding Snils}"/>
-                                        <GridViewColumn Header="Дата" Width="120" DisplayMemberBinding="{Binding CreatedAt, StringFormat={}{0:dd.MM.yyyy HH:mm}}"/>
-                                        <GridViewColumn Header="Статус в Госключе" Width="180" DisplayMemberBinding="{Binding StatusName}"/>
-                                        <GridViewColumn Header="Код статуса" Width="130" DisplayMemberBinding="{Binding StateOrgStatusCode}"/>
-                                    </GridView>
-                                </ListView.View>
-                            </ListView>
+                            <TextBlock Text="Организация (Доверитель):" FontWeight="Bold" Margin="0,0,0,3"/>
+                            <ComboBox x:Name="CmbOrganizations" Margin="0,0,0,12" Height="27" DisplayMemberPath="Name"/>
 
-                            <StackPanel Orientation="Horizontal">
-                                <Button Content="Проверить статус выбранного" Width="190" Height="30" Margin="0,0,10,0" Click="BtnCheckSelectedStatus_Click"/>
-                                <Button Content="Скачать подписанные файлы (.sig/.pdf)" Width="240" Height="30" Click="BtnDownloadSignedFiles_Click"/>
-                            </StackPanel>
+                            <Grid Margin="0,0,0,15">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="10"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="ФИО Заявителя:" FontWeight="Bold"/>
+                                    <TextBox x:Name="TxtAuthorName" Height="25" Margin="0,3,0,0" Text="Шориков Тимофей Андреевич"/>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="СНИЛС Заявителя:" FontWeight="Bold"/>
+                                    <TextBox x:Name="TxtFsspSnils" Height="25" Margin="0,3,0,0" MaxLength="14" TextChanged="TxtSnils_TextChanged"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <Button x:Name="BtnSendFssp" Content="Отправить запрос в ФССП" Width="220" HorizontalAlignment="Left" Height="38" Click="BtnSendFssp_Click" Background="#FF28A745" Foreground="White" FontWeight="Bold" Cursor="Hand"/>
                         </StackPanel>
                     </GroupBox>
+                </TabItem>
+            </TabControl>
 
-                    <!-- Журнал логов -->
-                    <TextBlock Text="Журнал операций:" FontWeight="Bold" Margin="0,5,0,2"/>
-                    <TextBox x:Name="TxtStatus" Height="90" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Background="#FFF1F1F1" FontFamily="Consolas"/>
-                </StackPanel>
-            </ScrollViewer>
+            <GroupBox Grid.Row="3" Header="История заявлений (Автосохранение)" Padding="10" Margin="0,0,0,10">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Text="Единый реестр отправленных пакетов (Госключ и ФССП)." FontSize="11" Foreground="Gray" Margin="0,0,0,8"/>
+
+                    <ListView x:Name="OrdersListView" Grid.Row="1" Margin="0,0,0,10">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Order ID" Width="90" DisplayMemberBinding="{Binding OrderId}"/>
+                                <GridViewColumn Header="Файл/Запрос" Width="140" DisplayMemberBinding="{Binding FileName}"/>
+                                <GridViewColumn Header="СНИЛС" Width="100" DisplayMemberBinding="{Binding Snils}"/>
+                                <GridViewColumn Header="Дата" Width="120" DisplayMemberBinding="{Binding CreatedAt, StringFormat={}{0:dd.MM.yyyy HH:mm}}"/>
+                                <GridViewColumn Header="Статус на ЕПГУ" Width="180" DisplayMemberBinding="{Binding StatusName}"/>
+                                <GridViewColumn Header="Код статуса" Width="130" DisplayMemberBinding="{Binding StateOrgStatusCode}"/>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal">
+                        <Button Content="Проверить статус выбранного" Width="200" Height="30" Margin="0,0,10,0" Click="BtnCheckSelectedStatus_Click"/>
+                        <Button Content="Скачать результаты / подписи" Width="220" Height="30" Click="BtnDownloadSignedFiles_Click"/>
+                    </StackPanel>
+                </Grid>
+            </GroupBox>
+
+            <StackPanel Grid.Row="4">
+                <TextBlock Text="Журнал операций:" FontWeight="Bold" Margin="0,0,0,5"/>
+                <TextBox x:Name="TxtStatus" Height="100" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Background="#FFF1F1F1" FontFamily="Consolas" BorderBrush="#FFDDDDDD"/>
+            </StackPanel>
         </Grid>
     </Grid>
 </Window>

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -6,155 +7,165 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-namespace TSN_MULTI_API.Core
+namespace TSN_MULTI_API.Services
 {
     public class ApiClient
     {
         private readonly HttpClient _httpClient;
-        private const string ApiEpguBaseUrl = "https://svcdev-beta.test.gosuslugi.ru/api/gusmev/";
+
+        // Используем тестовый контур ЕПГУ, так как токен получаем из тестовой ЕСИА
+        private const string ApiEpguBaseUrl = "https://svcdev-beta.test.gosuslugi.ru";
 
         public ApiClient()
         {
-            var handler = new HttpClientHandler { AllowAutoRedirect = true };
-            _httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(2) };
+            _httpClient = new HttpClient();
         }
 
-        public async Task<long> SendPushAsync(byte[] archiveBytes, string accessToken)
+        public async Task<long> ReserveOrderIdAsync(string serviceCode, string targetCode, string regionCode, string token)
         {
-            string fullUrl = new Uri(new Uri(ApiEpguBaseUrl), "push").ToString();
-            using var msg = new HttpRequestMessage(HttpMethod.Post, fullUrl);
-            msg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            var requestBody = new
+            {
+                region = regionCode,
+                serviceCode = serviceCode,
+                targetCode = targetCode
+            };
+
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiEpguBaseUrl}/api/gusmev/order");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            request.Content = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                string errorBody = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Код {(int)response.StatusCode}. Детали: {errorBody}");
+            }
+
+            var responseString = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(responseString);
+            return doc.RootElement.GetProperty("orderId").GetInt64();
+        }
+
+        public async Task SendChunkedArchiveAsync(long orderId, byte[] archiveData, string token)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiEpguBaseUrl}/api/gusmev/push/chunked");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
             using var content = new MultipartFormDataContent();
-            string metaJson = "{\"region\":\"00000000000\", \"serviceCode\":\"10000000374\", \"targetCode\":\"-10000000374\"}";
-            content.Add(new StringContent(metaJson, Encoding.UTF8, "application/json"), "meta");
+            content.Add(new StringContent(orderId.ToString()), "orderId");
+            content.Add(new StringContent("1"), "chunks");
+            content.Add(new StringContent("0"), "chunk");
 
-            var fileContent = new ByteArrayContent(archiveBytes);
+            var fileContent = new ByteArrayContent(archiveData);
             fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse("application/zip");
             content.Add(fileContent, "file", "archive.zip");
 
-            msg.Content = content;
+            request.Content = content;
 
-            HttpResponseMessage response = await _httpClient.SendAsync(msg);
-            string responseJson = await response.Content.ReadAsStringAsync();
-
+            var response = await _httpClient.SendAsync(request);
             if (!response.IsSuccessStatusCode)
-                throw new Exception($"Ошибка API ЕПГУ (Push): {response.StatusCode}. Ответ: {responseJson}");
-
-            using JsonDocument jsonDoc = JsonDocument.Parse(responseJson);
-            if (jsonDoc.RootElement.TryGetProperty("orderId", out JsonElement orderIdElement))
-                return orderIdElement.GetInt64();
-
-            throw new Exception($"Не удалось получить orderId: {responseJson}");
+            {
+                string errorBody = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Код {(int)response.StatusCode}. Детали: {errorBody}");
+            }
         }
-
-        public async Task<string> GetOrderStatusAsync(long orderId, string accessToken)
+                    public async Task<long> SendPushAsync(byte[] archiveData, string serviceCode, string targetCode, string region, string token)
         {
-            string fullUrl = new Uri(new Uri(ApiEpguBaseUrl), $"order/{orderId}").ToString();
-            using var request = new HttpRequestMessage(HttpMethod.Post, fullUrl);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiEpguBaseUrl}/api/gusmev/push");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-            HttpResponseMessage response = await _httpClient.SendAsync(request);
-            string responseJson = await response.Content.ReadAsStringAsync();
+            var meta = new { region = region, serviceCode = serviceCode, targetCode = targetCode };
 
+            using var content = new MultipartFormDataContent();
+            content.Add(new StringContent(JsonSerializer.Serialize(meta), Encoding.UTF8, "application/json"), "meta");
+
+            var fileContent = new ByteArrayContent(archiveData);
+            fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse("application/zip");
+            content.Add(fileContent, "file", "archive.zip");
+
+            request.Content = content;
+
+            var response = await _httpClient.SendAsync(request);
             if (!response.IsSuccessStatusCode)
-                throw new Exception($"Ошибка проверки статуса: {response.StatusCode}. Ответ: {responseJson}");
-
-            return responseJson;
+            {
+                string errorBody = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Код {(int)response.StatusCode}. Детали: {errorBody}");
+            }
+                 var responseString = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(responseString);
+            return doc.RootElement.GetProperty("orderId").GetInt64();
         }
 
-        public static (string Mnemonic, string ObjectType) ParseAttachmentLink(string link)
+        public async Task<string> GetOrderStatusAsync(long orderId, string token)
         {
-            if (!Uri.TryCreate(link, UriKind.Absolute, out Uri? uri) ||
-                !string.Equals(uri.Scheme, "terrabyte", StringComparison.OrdinalIgnoreCase))
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiEpguBaseUrl}/api/gusmev/order/{orderId}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
             {
-                throw new ArgumentException($"Некорректная ссылка на файл результата: {link}");
+                string errorBody = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Код {(int)response.StatusCode}. Детали: {errorBody}");
             }
 
-            string[] parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 2)
-                throw new ArgumentException($"Некорректная ссылка на файл результата: {link}");
-
-            string mnemonic = parts[^2];
-            string objectType = parts[^1];
-            if (string.IsNullOrWhiteSpace(mnemonic) || string.IsNullOrWhiteSpace(objectType))
-                throw new ArgumentException($"Некорректная ссылка на файл результата: {link}");
-
-            return (mnemonic, objectType);
+            return await response.Content.ReadAsStringAsync();
         }
 
-        public async Task DownloadResultFileAsync(long currentStatusHistoryId, string fileName, string token, string savePath)
+        public async Task DownloadResultFileAsync(long currentStatusHistoryId, string mnemonic, string token, string savePath)
         {
-            // Очищаем токен от случайного префикса "Bearer ", если он есть
-            if (token.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            string url = $"{ApiEpguBaseUrl}/api/gusmev/files/download/{currentStatusHistoryId}/3?mnemonic={mnemonic}";
+
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
             {
-                token = token.Substring(7).Trim();
+                string errorBody = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Код {(int)response.StatusCode}. Детали: {errorBody}");
             }
-
-            string escapedFileName = Uri.EscapeDataString(fileName);
-            string baseUrl = ApiEpguBaseUrl.TrimEnd('/');
-            string url = $"{baseUrl}/files/download/{currentStatusHistoryId}/3?mnemonic={escapedFileName}&eserviceCode=10000000374";
-
-            // 1. Отключаем авто-редирект, чтобы управлять заголовками вручную
-            using var handler = new HttpClientHandler { AllowAutoRedirect = false };
-            using var downloadClient = new HttpClient(handler);
-
-            if (_httpClient.BaseAddress != null)
+            else
             {
-                downloadClient.BaseAddress = _httpClient.BaseAddress;
+
+                byte[] fileBytes = await response.Content.ReadAsByteArrayAsync();
+                await System.IO.File.WriteAllBytesAsync(savePath, fileBytes);
             }
-
-            // 2. Копируем все базовые заголовки (API-Key и прочие), КРОМЕ Authorization
-            foreach (var header in _httpClient.DefaultRequestHeaders)
-            {
-                if (header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                downloadClient.DefaultRequestHeaders.TryAddWithoutValidation(header.Key, header.Value);
-            }
-
-            // ШАГ 1: Запрос к API ЕПГУ
-            using var request1 = new HttpRequestMessage(HttpMethod.Get, url);
-            request1.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-            using var response1 = await downloadClient.SendAsync(request1, HttpCompletionOption.ResponseHeadersRead);
-            HttpResponseMessage finalResponse = response1;
-
-            // ШАГ 2: Ловим редирект (302) во внутреннее файловое хранилище (/api/storage)
-            if ((int)response1.StatusCode >= 300 && (int)response1.StatusCode < 400 && response1.Headers.Location != null)
-            {
-                Uri redirectUri = response1.Headers.Location;
-                if (!redirectUri.IsAbsoluteUri)
-                {
-                    Uri baseHost = _httpClient.BaseAddress ?? new Uri(baseUrl);
-                    redirectUri = new Uri(baseHost, redirectUri);
-                }
-
-                using var request2 = new HttpRequestMessage(HttpMethod.Get, redirectUri);
-
-                // КРИТИЧНО 1: ВОЗВРАЩАЕМ ТОКЕН! Внутреннее хранилище ЕПГУ требует авторизации.
-                request2.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-                // КРИТИЧНО 2: Передаем Cookies (балансировщик ЕПГУ часто выдает их в 302 ответе)
-                if (response1.Headers.TryGetValues("Set-Cookie", out var setCookies))
-                {
-                    var cookiesToPass = string.Join("; ", setCookies.Select(c => c.Split(';')[0]));
-                    request2.Headers.Add("Cookie", cookiesToPass);
-                }
-
-                finalResponse = await downloadClient.SendAsync(request2, HttpCompletionOption.ResponseHeadersRead);
-            }
-
-            // Проверяем итоговый результат
-            if (!finalResponse.IsSuccessStatusCode)
-            {
-                string errorContent = await finalResponse.Content.ReadAsStringAsync();
-                string step = finalResponse == response1 ? "Шаг 1 (API)" : "Шаг 2 (Хранилище)";
-                throw new Exception($"{step}: Код {(int)finalResponse.StatusCode}. URL: {finalResponse.RequestMessage?.RequestUri}. Ответ: {errorContent}");
-            }
-
-            // Сохраняем файл
-            using var fileStream = new FileStream(savePath, FileMode.Create, FileAccess.Write, FileShare.None);
-            await finalResponse.Content.CopyToAsync(fileStream);
         }
+        public static (string mnemonic, int objectType) ParseAttachmentLink(string link)
+        {
+            if (string.IsNullOrWhiteSpace(link)) return ("result", 3);
+            var parts = link.Split('/');
+            if (parts.Length >= 2)
+            {
+                string mnemonic = parts[parts.Length - 2];
+                int.TryParse(parts[parts.Length - 1], out int objType);
+                return (mnemonic, objType);
+            }
+            return ("result", 3);
+        }
+    }
+
+    // ==============================================================================
+    // БЛОК МОДЕЛЕЙ
+    // ==============================================================================
+
+    public class UserTemplateData
+    {
+        public string AuthorName { get; set; } = string.Empty;
+        public string AuthorBorn { get; set; } = string.Empty;
+        public string AuthorSnils { get; set; } = string.Empty;
+        public string AuthorPhone { get; set; } = string.Empty;
+        public string AuthorAddress { get; set; } = string.Empty;
+
+        public string TargetIpNum { get; set; } = string.Empty;
+        public string PetitionText { get; set; } = string.Empty;
+    }
+
+    public class OrganizationRecord
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Inn { get; set; } = string.Empty;
+        public string Ogrn { get; set; } = string.Empty;
+        public string Address { get; set; } = string.Empty;
     }
 }
