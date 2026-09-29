@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography.X509Certificates;
+using System.Security.Cryptography.Pkcs;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
-using System.Text.Json;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 using TSN_MULTI_API.Core;
 
@@ -17,6 +19,12 @@ namespace TSN_MULTI_API
         private readonly ApiClient _apiClient;
         private readonly ArchiveBuilder _archiveBuilder;
         private List<OrderRecord> _ordersList = new List<OrderRecord>();
+        private List<string> _selectedFiles = new List<string>();
+        private List<AddressBookEntry> _addressBookEntries = new List<AddressBookEntry>();
+        private Guid? _editingAddressBookId;
+
+        private readonly SettingsManager _settingsManager;
+        private readonly System.Windows.Threading.DispatcherTimer _pollingTimer;
 
         public MainWindow()
         {
@@ -25,9 +33,241 @@ namespace TSN_MULTI_API
             _apiClient = new ApiClient();
             _archiveBuilder = new ArchiveBuilder();
 
+            _settingsManager = new SettingsManager();
+            ApplySettingsToUi();
+
             LoadCertificates();
+            LoadAddressBook();
             LoadHistoryToUI();
-            TxtHeader.Text = "Госключ - Управление и История";
+
+            ShowPanel("goskey");
+
+            _pollingTimer = new System.Windows.Threading.DispatcherTimer();
+            _pollingTimer.Interval = TimeSpan.FromSeconds(30);
+            _pollingTimer.Tick += PollingTimer_Tick;
+            _pollingTimer.Start();
+        }
+
+        private void ShowPanel(string panel)
+        {
+            PanelGoskey.Visibility = panel == "goskey" ? Visibility.Visible : Visibility.Collapsed;
+            PanelAddressBook.Visibility = panel == "addressbook" ? Visibility.Visible : Visibility.Collapsed;
+            PanelSettings.Visibility = panel == "settings" ? Visibility.Visible : Visibility.Collapsed;
+
+            ResetNavHighlight(BtnNavGoskey, panel == "goskey");
+            ResetNavHighlight(BtnNavAddressBook, panel == "addressbook");
+            ResetNavHighlight(BtnNavSettings, panel == "settings");
+
+            TxtHeader.Text = panel switch
+            {
+                "addressbook" => "Адресная книга",
+                "settings" => "Настройки",
+                _ => "Отправка документов в Госключ"
+            };
+        }
+
+        private static void ResetNavHighlight(Button button, bool active)
+        {
+            button.Background = active
+                ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x3A, 0x6B, 0xA8))
+                : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2A, 0x50, 0x82));
+            button.FontWeight = active ? FontWeights.Bold : FontWeights.Normal;
+        }
+
+        private void NavGoskey_Click(object sender, RoutedEventArgs e) => ShowPanel("goskey");
+        private void NavAddressBook_Click(object sender, RoutedEventArgs e) => ShowPanel("addressbook");
+        private void NavSettings_Click(object sender, RoutedEventArgs e) => ShowPanel("settings");
+
+        private void ApplySettingsToUi()
+        {
+            var s = _settingsManager.Current;
+            TxtSettingsStatementsDir.Text = s.StatementsDirectory;
+            TxtSettingsDocsDir.Text = s.DefaultDocumentsDirectory;
+            TxtApiKeyBox.Text = string.IsNullOrWhiteSpace(s.DefaultApiKey) ? AppDefaults.ApiKey : s.DefaultApiKey;
+            TxtSettingsDefaultDescription.Text = s.DefaultDescription;
+            TxtDescription.Text = string.IsNullOrWhiteSpace(s.DefaultDescription)
+                ? "Членская книжка ТСН Сапожок"
+                : s.DefaultDescription;
+        }
+
+        private void BtnSaveSettings_Click(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(TxtSettingsStatementsDir.Text))
+            {
+                MessageBox.Show("Укажите папку для сохранения заявлений.", "Настройки", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            _settingsManager.Current.StatementsDirectory = TxtSettingsStatementsDir.Text.Trim();
+            _settingsManager.Current.DefaultDocumentsDirectory = TxtSettingsDocsDir.Text.Trim();
+            _settingsManager.Current.DefaultApiKey = TxtApiKeyBox.Text.Trim();
+            _settingsManager.Current.DefaultDescription = TxtSettingsDefaultDescription.Text.Trim();
+            _settingsManager.Current.DefaultCertificateThumbprint =
+                CertComboBox.SelectedValue?.ToString() ?? string.Empty;
+
+            _settingsManager.SaveSettings();
+            TxtDescription.Text = _settingsManager.Current.DefaultDescription;
+            UpdateActiveCertSummary();
+
+            MessageBox.Show("Настройки сохранены.", "Готово", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void BtnBrowseStatementsDir_Click(object sender, RoutedEventArgs e)
+        {
+            string? folder = PickFolder("Выберите папку для заявлений", TxtSettingsStatementsDir.Text);
+            if (folder != null)
+                TxtSettingsStatementsDir.Text = folder;
+        }
+
+        private void BtnBrowseDocsDir_Click(object sender, RoutedEventArgs e)
+        {
+            string? folder = PickFolder("Выберите папку для документов по умолчанию", TxtSettingsDocsDir.Text);
+            if (folder != null)
+                TxtSettingsDocsDir.Text = folder;
+        }
+
+        private static string? PickFolder(string title, string initial)
+        {
+            var dialog = new OpenFolderDialog
+            {
+                Title = title,
+                InitialDirectory = Directory.Exists(initial) ? initial : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)
+            };
+            return dialog.ShowDialog() == true ? dialog.FolderName : null;
+        }
+
+        private void LoadAddressBook()
+        {
+            _addressBookEntries = AddressBookManager.Load()
+                .OrderBy(e => e.LastName)
+                .ThenBy(e => e.FirstName)
+                .ToList();
+            AddressBookGrid.ItemsSource = null;
+            AddressBookGrid.ItemsSource = _addressBookEntries;
+
+            CmbAddressBookPick.ItemsSource = null;
+            CmbAddressBookPick.ItemsSource = _addressBookEntries;
+        }
+
+        private void AddressBookGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (AddressBookGrid.SelectedItem is not AddressBookEntry entry)
+                return;
+
+            _editingAddressBookId = entry.Id;
+            TxtAbLastName.Text = entry.LastName;
+            TxtAbFirstName.Text = entry.FirstName;
+            TxtAbPatronymic.Text = entry.Patronymic;
+            TxtAbSnils.Text = entry.Snils;
+        }
+
+        private void BtnAbNew_Click(object sender, RoutedEventArgs e)
+        {
+            _editingAddressBookId = null;
+            AddressBookGrid.SelectedItem = null;
+            TxtAbLastName.Clear();
+            TxtAbFirstName.Clear();
+            TxtAbPatronymic.Clear();
+            TxtAbSnils.Clear();
+            TxtAbLastName.Focus();
+        }
+
+        private void BtnAbSave_Click(object sender, RoutedEventArgs e)
+        {
+            string lastName = TxtAbLastName.Text.Trim();
+            if (string.IsNullOrWhiteSpace(lastName))
+            {
+                MessageBox.Show("Укажите фамилию.", "Адресная книга", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            string snils = SnilsFormatter.Format(TxtAbSnils.Text);
+            if (!SnilsFormatter.IsComplete(snils))
+            {
+                MessageBox.Show("СНИЛС должен содержать 11 цифр.", "Адресная книга", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            AddressBookEntry entry;
+            if (_editingAddressBookId.HasValue)
+            {
+                entry = _addressBookEntries.FirstOrDefault(x => x.Id == _editingAddressBookId.Value)
+                        ?? new AddressBookEntry { Id = _editingAddressBookId.Value };
+            }
+            else
+            {
+                entry = new AddressBookEntry();
+                _addressBookEntries.Add(entry);
+            }
+
+            entry.LastName = lastName;
+            entry.FirstName = TxtAbFirstName.Text.Trim();
+            entry.Patronymic = TxtAbPatronymic.Text.Trim();
+            entry.Snils = snils;
+
+            AddressBookManager.Save(_addressBookEntries);
+            _editingAddressBookId = entry.Id;
+            LoadAddressBook();
+            AddressBookGrid.SelectedItem = _addressBookEntries.FirstOrDefault(x => x.Id == entry.Id);
+        }
+
+        private void BtnAbDelete_Click(object sender, RoutedEventArgs e)
+        {
+            if (!_editingAddressBookId.HasValue)
+            {
+                MessageBox.Show("Выберите запись для удаления.", "Адресная книга", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (MessageBox.Show("Удалить выбранную запись?", "Адресная книга", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+
+            _addressBookEntries.RemoveAll(x => x.Id == _editingAddressBookId.Value);
+            AddressBookManager.Save(_addressBookEntries);
+            BtnAbNew_Click(sender, e);
+            LoadAddressBook();
+        }
+
+        private void BtnAbUseForSend_Click(object sender, RoutedEventArgs e)
+        {
+            AddressBookEntry? entry = AddressBookGrid.SelectedItem as AddressBookEntry;
+            if (entry == null && _editingAddressBookId.HasValue)
+                entry = _addressBookEntries.FirstOrDefault(x => x.Id == _editingAddressBookId.Value);
+
+            if (entry == null)
+            {
+                MessageBox.Show("Выберите или сохраните запись в адресной книге.", "Адресная книга", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            ApplyAddressEntryToSendForm(entry);
+            ShowPanel("goskey");
+        }
+
+        private void CmbAddressBookPick_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (CmbAddressBookPick.SelectedItem is AddressBookEntry entry)
+                ApplyAddressEntryToSendForm(entry);
+        }
+
+        private void ApplyAddressEntryToSendForm(AddressBookEntry entry)
+        {
+            TxtSnils.Text = entry.Snils;
+            if (string.IsNullOrWhiteSpace(TxtDescription.Text))
+                TxtDescription.Text = _settingsManager.Current.DefaultDescription;
+        }
+
+        private bool _isFormattingAbSnils;
+        private void TxtAbSnils_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_isFormattingAbSnils)
+                return;
+
+            string formatted = SnilsFormatter.Format(TxtAbSnils.Text);
+            _isFormattingAbSnils = true;
+            TxtAbSnils.Text = formatted;
+            TxtAbSnils.SelectionStart = formatted.Length;
+            _isFormattingAbSnils = false;
         }
 
         private void Log(string message)
@@ -76,9 +316,17 @@ namespace TSN_MULTI_API
                     .ToList();
 
                 CertComboBox.ItemsSource = validCerts;
-                if (validCerts.Count > 0)
+
+                string preferred = CryptoSigner.NormalizeThumbprint(_settingsManager.Current.DefaultCertificateThumbprint);
+                var preferredCert = validCerts.FirstOrDefault(c =>
+                    string.Equals(c.Thumbprint, preferred, StringComparison.OrdinalIgnoreCase));
+
+                if (preferredCert != null)
+                    CertComboBox.SelectedItem = preferredCert;
+                else if (validCerts.Count > 0)
                     CertComboBox.SelectedIndex = 0;
 
+                UpdateActiveCertSummary();
                 Log($"Сертификатов с закрытым ключом: {validCerts.Count}");
             }
             catch (Exception ex)
@@ -87,13 +335,32 @@ namespace TSN_MULTI_API
             }
         }
 
-        private void RefreshCerts_Click(object sender, RoutedEventArgs e) => LoadCertificates();
+        private void CertComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+            UpdateActiveCertSummary();
+
+        private void UpdateActiveCertSummary()
+        {
+            if (CertComboBox.SelectedItem is CertificateItem cert)
+            {
+                TxtActiveCertSummary.Text =
+                    $"{cert.SubjectName}\nОтпечаток: {cert.Thumbprint}\nДействует до: {cert.NotAfter:dd.MM.yyyy}";
+            }
+            else
+            {
+                TxtActiveCertSummary.Text = "Сертификат не выбран. Откройте «Настройки» и выберите сертификат по умолчанию.";
+            }
+        }
+
+        private void RefreshCerts_Click(object sender, RoutedEventArgs e)
+        {
+            LoadCertificates();
+        }
 
         private void BtnCertProperties_Click(object sender, RoutedEventArgs e)
         {
             if (CertComboBox.SelectedItem is not CertificateItem selected)
             {
-                MessageBox.Show("Сначала выберите сертификат.");
+                MessageBox.Show("Сначала выберите сертификат в настройках.", "Сертификат", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
@@ -105,7 +372,7 @@ namespace TSN_MULTI_API
                     $"Отпечаток: {selected.Thumbprint}\n" +
                     $"Хранилище: {selected.StoreLocation}\n" +
                     $"Срок действия до: {certificate.NotAfter:dd.MM.yyyy HH:mm:ss}\n" +
-                    $"Закрытый ключ CryptoPro: {(certificate.HasPrivateKey ? "ДОСТУПЕН" : "НЕДОСТУПЕН")}\n" +
+                    $"Закрытый ключ CryptoPro: {(certificate.HasPrivateKey ? "доступен" : "недоступен")}\n" +
                     $"Алгоритм: {certificate.PublicKey.Oid.Value}",
                     "Свойства сертификата",
                     MessageBoxButton.OK,
@@ -144,23 +411,30 @@ namespace TSN_MULTI_API
 
         private void BtnSelectFile_Click(object sender, RoutedEventArgs e)
         {
-            OpenFileDialog dlg = new OpenFileDialog { Filter = "PDF файлы (*.pdf)|*.pdf|Все файлы (*.*)|*.*" };
-            if (dlg.ShowDialog() == true) TxtFilePath.Text = dlg.FileName;
+            string startDir = _settingsManager.Current.DefaultDocumentsDirectory;
+            if (!Directory.Exists(startDir))
+                startDir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+            OpenFileDialog dlg = new OpenFileDialog
+            {
+                Filter = "Поддерживаемые файлы (*.pdf;*.tif;*.tiff;*.jpg;*.jpeg;*.xml;*.txt)|*.pdf;*.tif;*.tiff;*.jpg;*.jpeg;*.xml;*.txt|Все файлы (*.*)|*.*",
+                InitialDirectory = startDir,
+                Multiselect = true
+            };
+            if (dlg.ShowDialog() == true)
+            {
+                _selectedFiles = dlg.FileNames.ToList();
+                TxtFilePath.Text = string.Join("; ", _selectedFiles.Select(Path.GetFileName));
+            }
         }
 
-        private bool _isFormattingSnils = false;
+        private bool _isFormattingSnils;
         private void TxtSnils_TextChanged(object sender, TextChangedEventArgs e)
         {
-            if (_isFormattingSnils) return;
-            string text = new string(TxtSnils.Text.Where(char.IsDigit).ToArray());
-            if (text.Length > 11) text = text.Substring(0, 11);
-            string formatted = "";
-            for (int i = 0; i < text.Length; i++)
-            {
-                if (i == 3 || i == 6) formatted += "-";
-                else if (i == 9) formatted += " ";
-                formatted += text[i];
-            }
+            if (_isFormattingSnils)
+                return;
+
+            string formatted = SnilsFormatter.Format(TxtSnils.Text);
             _isFormattingSnils = true;
             TxtSnils.Text = formatted;
             TxtSnils.SelectionStart = formatted.Length;
@@ -169,19 +443,26 @@ namespace TSN_MULTI_API
 
         private async void PushArchiveSmartAsync_Click(object sender, RoutedEventArgs e)
         {
-            if (CertComboBox.SelectedValue == null || string.IsNullOrWhiteSpace(TxtFilePath.Text))
+            if (CertComboBox.SelectedValue == null || _selectedFiles.Count == 0)
             {
-                MessageBox.Show("Выберите сертификат и файл!");
+                MessageBox.Show("Выберите сертификат в настройках и файл для отправки.", "Отправка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (!SnilsFormatter.IsComplete(TxtSnils.Text))
+            {
+                MessageBox.Show("Укажите корректный СНИЛС получателя (11 цифр).", "Отправка", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
             string thumbprint = CertComboBox.SelectedValue.ToString() ?? string.Empty;
             string apiKey = TxtApiKeyBox.Text.Trim();
             string token = TxtManualTokenBox.Text.Trim();
+            SignatureType signatureType = CmbSignatureType.SelectedIndex == 1 ? SignatureType.Unep : SignatureType.Ukep;
 
             try
             {
-                Log("--- Отправка документа в Госключ ---");
+                Log($"--- Отправка {(_selectedFiles.Count == 1 ? "документа" : "пакета из " + _selectedFiles.Count + " документов")} в Госключ ({(signatureType == SignatureType.Unep ? "УНЭП" : "УКЭП")}) ---");
                 if (string.IsNullOrEmpty(token))
                 {
                     Log("Создание подписи API-Key и получение accessTkn...");
@@ -193,26 +474,37 @@ namespace TSN_MULTI_API
                     Log("Используется вручную введённый AccessTkn.");
                 }
 
-                Log("Формирование XML и двух CMS detached-подписей для архива...");
-                byte[] archiveBytes = _archiveBuilder.BuildArchive(TxtFilePath.Text, TxtSnils.Text, TxtDescription.Text, thumbprint);
-                Log("CMS-подписи успешно сформированы и локально проверены.");
-                long orderId = await _apiClient.SendPushAsync(archiveBytes, token);
+                Log(signatureType == SignatureType.Ukep
+                    ? "Формирование XML УКЭП и CMS detached-подписей для всех файлов архива..."
+                    : "Формирование XML УНЭП и обязательных CMS detached-подписей отправителя...");
+                ArchiveBuildResult archive = _archiveBuilder.BuildArchive(_selectedFiles, TxtSnils.Text, TxtDescription.Text, thumbprint, signatureType);
+                Log("CMS-подписи отправителя успешно сформированы и локально проверены.");
+
+                long orderId = await _apiClient.SendPushAsync(archive.ArchiveBytes, token);
+
+                string saveDir = Path.Combine(_settingsManager.Current.StatementsDirectory, orderId.ToString());
+                Directory.CreateDirectory(saveDir);
+                SaveArchiveMaterials(saveDir, archive.Files);
 
                 var record = new OrderRecord
                 {
                     OrderId = orderId,
-                    FileName = Path.GetFileName(TxtFilePath.Text),
+                    FileName = string.Join(", ", _selectedFiles.Select(path => Path.GetFileName(path)!)),
+                    SourceFiles = _selectedFiles.Select(path => Path.GetFileName(path)!).ToList(),
+                    SignatureType = signatureType == SignatureType.Unep ? "УНЭП" : "УКЭП",
                     Snils = TxtSnils.Text,
                     Description = TxtDescription.Text,
                     CreatedAt = DateTime.Now,
                     StatusName = "Принята порталом, ожидается обработка"
                 };
+
                 HistoryManager.AddOrUpdate(record);
                 LoadHistoryToUI();
 
                 Log($"Заявка принята порталом. Order ID: {orderId}. Это ещё не подтверждение доставки в Госключ.");
                 Log("Проверка фактической доставки в Госключ...");
-                await RefreshOrderStatusAsync(record, token);
+                OrderRecord tracked = FindOrder(orderId) ?? record;
+                await RefreshOrderStatusAsync(tracked, token);
             }
             catch (Exception ex)
             {
@@ -229,7 +521,7 @@ namespace TSN_MULTI_API
         {
             if (OrdersListView.SelectedItem is not OrderRecord selectedOrder)
             {
-                MessageBox.Show("Выберите заявление из таблицы истории!");
+                MessageBox.Show("Выберите заявление из таблицы истории.", "История", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
@@ -240,8 +532,10 @@ namespace TSN_MULTI_API
             try
             {
                 Log($"Проверка статуса для Order ID: {selectedOrder.OrderId}...");
-                if (string.IsNullOrEmpty(token)) token = await _authManager.GetAccessTokenAsync(apiKey, thumbprint);
-                await RefreshOrderStatusAsync(selectedOrder, token);
+                if (string.IsNullOrEmpty(token))
+                    token = await _authManager.GetAccessTokenAsync(apiKey, thumbprint);
+                OrderRecord tracked = FindOrder(selectedOrder.OrderId) ?? selectedOrder;
+                await RefreshOrderStatusAsync(tracked, token);
             }
             catch (Exception ex)
             {
@@ -253,7 +547,7 @@ namespace TSN_MULTI_API
         {
             if (OrdersListView.SelectedItem is not OrderRecord selectedOrder)
             {
-                MessageBox.Show("Выберите заявку в списке!");
+                MessageBox.Show("Выберите заявку в списке.", "Скачивание", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
@@ -268,53 +562,35 @@ namespace TSN_MULTI_API
                 if (string.IsNullOrEmpty(token))
                     token = await _authManager.GetAccessTokenAsync(apiKey, thumbprint);
 
-                await RefreshOrderStatusAsync(selectedOrder, token);
+                OrderRecord tracked = FindOrder(selectedOrder.OrderId) ?? selectedOrder;
+                await RefreshOrderStatusAsync(tracked, token);
 
-                if (!IsDocumentsSigned(selectedOrder.StatusName))
+                if (!IsDocumentsSigned(tracked.StatusName, tracked.StateOrgStatusCode))
                 {
                     MessageBox.Show(
-                        "Документы еще не подписаны.\nТекущий статус: " + selectedOrder.StatusName,
+                        "Документы ещё не подписаны.\nТекущий статус: " + tracked.StatusName,
                         "Внимание",
                         MessageBoxButton.OK,
                         MessageBoxImage.Warning);
                     return;
                 }
 
-                string saveDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"Госключ_{selectedOrder.OrderId}");
-                Directory.CreateDirectory(saveDir);
+                string saveDir = Path.Combine(_settingsManager.Current.StatementsDirectory, tracked.OrderId.ToString());
+                int downloaded = await DownloadSignedFilesAsync(tracked, token, saveDir);
 
-                // Запрашиваем из Госключа только те документы, которые пользователь реально подписывал
-                var originalFiles = new List<string> { selectedOrder.FileName };
-
-                foreach (string baseFileName in originalFiles)
+                Log($"Скачивание завершено. Успешно: {downloaded}. Папка: {saveDir}");
+                if (downloaded == 0)
                 {
-                    if (string.IsNullOrWhiteSpace(baseFileName))
-                        continue;
-
-                    // На диск сохраняем с расширением .sig
-                    string savePath = Path.Combine(saveDir, baseFileName + ".sig");
-
-                    try
-                    {
-                        // СТРОГО ПО СПЕЦИФИКАЦИИ: 
-                        // 1. Используем CurrentStatusHistoryId
-                        // 2. Передаем оригинальное имя файла (baseFileName) без .sig
-                        await _apiClient.DownloadResultFileAsync(
-                            selectedOrder.CurrentStatusHistoryId,
-                            baseFileName,
-                            token,
-                            savePath);
-
-                        Log($"Успешно скачан файл подписи: {baseFileName}.sig");
-                    }
-                    catch (Exception ex)
-                    {
-                        Log($"Не удалось скачать подпись для {baseFileName}: {ex.Message}");
-                    }
+                    MessageBox.Show(
+                        "Не удалось скачать файлы. Проверьте журнал операций.",
+                        "Скачивание",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
                 }
-
-                Log($"Скачивание завершено. Папка: {saveDir}");
-                MessageBox.Show($"Файлы подписей сохранены в папку:\n{saveDir}", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
+                else
+                {
+                    MessageBox.Show($"Файлы подписей сохранены в папку:\n{saveDir}", "Готово", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
             }
             catch (Exception ex)
             {
@@ -323,30 +599,114 @@ namespace TSN_MULTI_API
             }
         }
 
-        private async Task RefreshOrderStatusAsync(OrderRecord order, string token)
+        private void BtnDeleteOrder_Click(object sender, RoutedEventArgs e)
         {
-            string responseJson = await _apiClient.GetOrderStatusAsync(order.OrderId, token);
-            using var doc = JsonDocument.Parse(responseJson);
-
-            if (doc.RootElement.TryGetProperty("order", out var orderProp))
+            if (OrdersListView.SelectedItem is not OrderRecord order)
             {
-                if (orderProp.ValueKind == JsonValueKind.String)
+                MessageBox.Show("Выберите заявку в списке.", "История", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (MessageBox.Show(
+                    $"Удалить заявку {order.OrderId} только из списка истории?\nФайлы в папке результата останутся.",
+                    "Удаление заявки",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question) != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            HistoryManager.Delete(order.OrderId);
+            LoadHistoryToUI();
+            Log($"Заявка {order.OrderId} удалена из истории.");
+        }
+
+        private void BtnVerifySignedFiles_Click(object sender, RoutedEventArgs e)
+        {
+            if (OrdersListView.SelectedItem is not OrderRecord order)
+            {
+                MessageBox.Show("Выберите заявку в списке.", "Проверка подписей", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string saveDir = Path.Combine(_settingsManager.Current.StatementsDirectory, order.OrderId.ToString());
+            if (!Directory.Exists(saveDir))
+            {
+                MessageBox.Show("Папка результата заявки не найдена.", "Проверка подписей", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            string receivedDir = Path.Combine(saveDir, "Госключ");
+            string[] signatures = Directory.Exists(receivedDir)
+                ? Directory.GetFiles(receivedDir, "*.sig", SearchOption.TopDirectoryOnly)
+                : Array.Empty<string>();
+            if (signatures.Length == 0)
+            {
+                MessageBox.Show("В папке «Госключ» нет скачанных подписей. Сначала скачайте результаты.", "Проверка подписей", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var report = new StringBuilder();
+            int valid = 0;
+            foreach (string signaturePath in signatures)
+            {
+                string signedFileName = Path.ChangeExtension(Path.GetFileName(signaturePath), null) ?? string.Empty;
+                // Ответ Госключа содержит пару: <имя>.sig и <имя> с
+                // mnemonic ..._attach. Проверяем именно возвращённый файл:
+                // это те же байты, с которыми была сформирована подпись.
+                string contentPath = Path.Combine(receivedDir, signedFileName);
+                if (!File.Exists(contentPath))
+                    contentPath = Path.Combine(saveDir, signedFileName);
+                if (!File.Exists(contentPath))
                 {
-                    string? orderStr = orderProp.GetString();
-                    if (!string.IsNullOrWhiteSpace(orderStr))
-                    {
-                        using var orderDoc = JsonDocument.Parse(orderStr);
-                        ApplyOrderDetails(order, orderDoc.RootElement);
-                    }
+                    report.AppendLine($"⚠ {Path.GetFileName(signaturePath)}: соответствующий документ не найден.");
+                    continue;
                 }
-                else if (orderProp.ValueKind == JsonValueKind.Object)
+
+                SignatureVerificationResult result = CryptoSigner.VerifyDetachedSignature(
+                    File.ReadAllBytes(contentPath),
+                    File.ReadAllBytes(signaturePath));
+                if (result.IsValid)
                 {
-                    ApplyOrderDetails(order, orderProp);
+                    valid++;
+                    report.AppendLine($"✓ {Path.GetFileName(signaturePath)}: подпись действительна.");
+                    report.AppendLine($"  {result.Details}");
+                }
+                else
+                {
+                    report.AppendLine($"✗ {Path.GetFileName(signaturePath)}: подпись НЕ прошла проверку.");
+                    report.AppendLine($"  {result.Details}");
                 }
             }
 
-            order.IsCompleted = order.StatusName.Contains("подписан", StringComparison.OrdinalIgnoreCase) ||
-                                IsDeliveryFailure(order.StatusName);
+            string summary = $"Проверено подписей: {signatures.Length}; действительных: {valid}.";
+            Log(summary);
+            MessageBox.Show(summary + Environment.NewLine + Environment.NewLine + report, "Результаты проверки подписей", MessageBoxButton.OK,
+                valid == signatures.Length ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        }
+
+        private static void SaveArchiveMaterials(string saveDir, IReadOnlyDictionary<string, byte[]> files)
+        {
+            foreach ((string name, byte[] contents) in files)
+            {
+                string targetDir = name.EndsWith(".sig", StringComparison.OrdinalIgnoreCase)
+                    ? Path.Combine(saveDir, "Отправитель")
+                    : saveDir;
+                Directory.CreateDirectory(targetDir);
+                File.WriteAllBytes(Path.Combine(targetDir, Path.GetFileName(name)), contents);
+            }
+        }
+
+        private OrderRecord? FindOrder(long orderId) =>
+            _ordersList.FirstOrDefault(o => o.OrderId == orderId);
+
+        private async Task RefreshOrderStatusAsync(OrderRecord order, string token)
+        {
+            string responseJson = await _apiClient.GetOrderStatusAsync(order.OrderId, token);
+            OrderStatusParser.ApplyFromResponse(order, responseJson);
+
+            order.IsCompleted = IsTerminalStatus(order.StatusName, order.StateOrgStatusCode);
+
             HistoryManager.AddOrUpdate(order);
             LoadHistoryToUI();
 
@@ -359,71 +719,108 @@ namespace TSN_MULTI_API
             {
                 Log(
                     "Статус заявки: " + order.StatusName + FormatStateCode(order.StateOrgStatusCode) +
-                    $"; ID истории: {order.CurrentStatusHistoryId}; результат: {(order.HasResult ? order.ResultFiles.Count : 0)} файл(ов).");
+                    $"; ID истории: {order.CurrentStatusHistoryId}; результат: {order.ResultFiles.Count} файл(ов).");
             }
         }
 
-        private static void ApplyOrderDetails(OrderRecord order, JsonElement orderElement)
+        private sealed record DownloadTarget(string Mnemonic, string ObjectType, string LocalFileName);
+
+        private static List<DownloadTarget> BuildDownloadTargets(OrderRecord order)
         {
-            if (orderElement.TryGetProperty("orderStatusName", out var statusNameProp))
-                order.StatusName = statusNameProp.GetString() ?? "Неизвестно";
+            var targets = new List<DownloadTarget>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            if (orderElement.TryGetProperty("stateOrgStatusCode", out var stateCodeProp))
-                order.StateOrgStatusCode = stateCodeProp.GetString() ?? string.Empty;
-
-            if (orderElement.TryGetProperty("currentStatusHistoryId", out var histIdProp) &&
-                histIdProp.ValueKind == JsonValueKind.Number)
-                order.CurrentStatusHistoryId = histIdProp.GetInt64();
-
-            if (orderElement.TryGetProperty("hasResult", out var hasResultProp) &&
-                hasResultProp.ValueKind is JsonValueKind.True or JsonValueKind.False)
-                order.HasResult = hasResultProp.GetBoolean();
-
-            if (orderElement.TryGetProperty("orderResponseFiles", out var responseFilesProp) &&
-                responseFilesProp.ValueKind == JsonValueKind.Array)
+            void Add(string mnemonic, string objectType, string localFileName)
             {
-                order.ResultFiles = responseFilesProp
-                    .EnumerateArray()
-                    .Select(ParseResultFile)
-                    .Where(file => file is not null)
-                    .Cast<ResultFileInfo>()
-                    .GroupBy(file => file.Link, StringComparer.OrdinalIgnoreCase)
-                    .Select(group => group.First())
-                    .ToList();
+                string key = objectType + "|" + mnemonic;
+                if (!seen.Add(key))
+                    return;
+                targets.Add(new DownloadTarget(mnemonic, objectType, localFileName));
             }
-        }
 
-        private static ResultFileInfo? ParseResultFile(JsonElement file)
-        {
-            if (!file.TryGetProperty("link", out var linkProp))
-                return null;
-
-            string? link = linkProp.GetString();
-            if (string.IsNullOrWhiteSpace(link))
-                return null;
-
-            string fileName = string.Empty;
-            if (file.TryGetProperty("fileName", out var fileNameProp))
-                fileName = fileNameProp.GetString() ?? string.Empty;
-
-            if (string.IsNullOrWhiteSpace(fileName))
+            foreach (ResultFileInfo file in order.ResultFiles)
             {
                 try
                 {
-                    (string mnemonic, _) = ApiClient.ParseAttachmentLink(link);
-                    fileName = mnemonic;
+                    (string mnemonic, string objectType) = ApiClient.ParseAttachmentLink(file.Link);
+                    // orderResponseFiles возвращает два разных результата:
+                    // подпись (*.sig) и подписанный документ (*_attach).
+                    // Нельзя дописывать .sig к последнему, иначе два файла
+                    // получают один путь и документ не скачивается.
+                    string localName = string.IsNullOrWhiteSpace(file.FileName) ? mnemonic : file.FileName;
+                    Add(mnemonic, objectType, Path.Combine("Госключ", localName));
                 }
                 catch
                 {
-                    fileName = "result";
+                    // ignore malformed links
                 }
             }
 
-            return new ResultFileInfo
+            // When the status response contains file links, they are the
+            // authoritative list.  Do not manufacture req.xml.sig or a
+            // <source>.sig name: those names are not storage mnemonics and
+            // produce misleading 404 errors.
+            if (targets.Count == 0)
             {
-                FileName = fileName,
-                Link = link
-            };
+                IEnumerable<string> sourceNames = order.SourceFiles.Count > 0
+                    ? order.SourceFiles
+                    : new[] { order.FileName };
+                foreach (string sourceName in sourceNames.Where(name => !string.IsNullOrWhiteSpace(name)))
+                {
+                    string localName = sourceName.EndsWith(".sig", StringComparison.OrdinalIgnoreCase)
+                        ? sourceName
+                        : sourceName + ".sig";
+                    // The download API accepts the original document mnemonic
+                    // and returns its detached signature. This is only a
+                    // fallback for old responses without result links.
+                    Add(sourceName, "3", Path.Combine("Госключ", localName));
+                }
+            }
+
+            return targets;
+        }
+
+        private async Task<int> DownloadSignedFilesAsync(OrderRecord order, string token, string saveDir)
+        {
+            if (order.CurrentStatusHistoryId <= 0)
+            {
+                Log("Скачивание невозможно: сервер ещё не выдал ID статуса заявки.");
+                return 0;
+            }
+
+            Directory.CreateDirectory(saveDir);
+            int downloaded = 0;
+
+            foreach (DownloadTarget target in BuildDownloadTargets(order))
+            {
+                string savePath = Path.Combine(saveDir, target.LocalFileName);
+                string? targetDirectory = Path.GetDirectoryName(savePath);
+                if (!string.IsNullOrWhiteSpace(targetDirectory))
+                    Directory.CreateDirectory(targetDirectory);
+                if (File.Exists(savePath))
+                {
+                    downloaded++;
+                    continue;
+                }
+
+                try
+                {
+                    await _apiClient.DownloadResultFileAsync(
+                        order.CurrentStatusHistoryId,
+                        target.Mnemonic,
+                        token,
+                        savePath,
+                        target.ObjectType);
+                    Log($"Успешно скачан файл: {target.LocalFileName}");
+                    downloaded++;
+                }
+                catch (Exception ex)
+                {
+                    Log($"Не удалось скачать {target.Mnemonic}: {ex.Message}");
+                }
+            }
+
+            return downloaded;
         }
 
         private static string FormatStateCode(string? stateCode) =>
@@ -441,9 +838,95 @@ namespace TSN_MULTI_API
             statusName.Contains("подписан", StringComparison.OrdinalIgnoreCase) &&
             !IsDeliveryFailure(statusName);
 
-        // Overload accepting stateOrgStatusCode for cases when API returns status code instead of human-friendly text
         private static bool IsDocumentsSigned(string? statusName, string? stateOrgStatusCode) =>
             (!string.IsNullOrWhiteSpace(stateOrgStatusCode) && stateOrgStatusCode.Contains("SIGNED", StringComparison.OrdinalIgnoreCase))
             || IsDocumentsSigned(statusName);
+
+        private static bool IsTerminalStatus(string? statusName, string? stateOrgStatusCode)
+        {
+            if (!string.IsNullOrWhiteSpace(stateOrgStatusCode) &&
+                (stateOrgStatusCode.Contains("DONE", StringComparison.OrdinalIgnoreCase) ||
+                 stateOrgStatusCode.Contains("SIGNED", StringComparison.OrdinalIgnoreCase) ||
+                 stateOrgStatusCode.Contains("REJECT", StringComparison.OrdinalIgnoreCase) ||
+                 stateOrgStatusCode.Contains("INVALID", StringComparison.OrdinalIgnoreCase) ||
+                 stateOrgStatusCode.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ||
+                 stateOrgStatusCode.Contains("EXPIRED", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+
+            return !string.IsNullOrWhiteSpace(statusName) &&
+                   (statusName.Contains("оказана", StringComparison.OrdinalIgnoreCase) ||
+                    statusName.Contains("подписан", StringComparison.OrdinalIgnoreCase) ||
+                    statusName.Contains("отказ", StringComparison.OrdinalIgnoreCase) ||
+                    statusName.Contains("недействител", StringComparison.OrdinalIgnoreCase) ||
+                    IsDeliveryFailure(statusName));
+        }
+
+        private bool _isPolling;
+        private async void PollingTimer_Tick(object? sender, EventArgs e)
+        {
+            if (_isPolling)
+                return;
+            _isPolling = true;
+
+            try
+            {
+                var incompleteOrderIds = _ordersList.Where(o => !o.IsCompleted).Select(o => o.OrderId).ToList();
+                if (incompleteOrderIds.Count == 0)
+                    return;
+
+                string thumbprint = CertComboBox.SelectedValue?.ToString() ?? string.Empty;
+                string apiKey = TxtApiKeyBox.Text.Trim();
+                string token = TxtManualTokenBox.Text.Trim();
+
+                if (string.IsNullOrEmpty(token))
+                {
+                    try
+                    {
+                        token = await _authManager.GetAccessTokenAsync(apiKey, thumbprint);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"[Фон] Ошибка получения токена: {ex.Message}");
+                        return;
+                    }
+                }
+
+                foreach (long orderId in incompleteOrderIds)
+                {
+                    OrderRecord? order = FindOrder(orderId);
+                    if (order == null)
+                        continue;
+
+                    try
+                    {
+                        Log($"[Фон] Опрос статуса заявки {order.OrderId}...");
+                        await RefreshOrderStatusAsync(order, token);
+
+                        order = FindOrder(orderId) ?? order;
+                        if (IsDocumentsSigned(order.StatusName, order.StateOrgStatusCode))
+                            await AutoDownloadSignedFilesAsync(order, token);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"[Фон] Ошибка при опросе {orderId}: {ex.Message}");
+                    }
+                }
+            }
+            finally
+            {
+                _isPolling = false;
+            }
+        }
+
+        private async Task AutoDownloadSignedFilesAsync(OrderRecord order, string token)
+        {
+            string saveDir = Path.Combine(_settingsManager.Current.StatementsDirectory, order.OrderId.ToString());
+            Log($"[Фон] Скачивание подписей для заявки {order.OrderId}...");
+            int downloaded = await DownloadSignedFilesAsync(order, token, saveDir);
+            if (downloaded > 0)
+                Log($"[Фон] Скачано файлов: {downloaded}. Папка: {saveDir}");
+        }
     }
 }

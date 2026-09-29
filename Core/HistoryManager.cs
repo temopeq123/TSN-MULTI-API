@@ -9,6 +9,8 @@ namespace TSN_MULTI_API.Core
     {
         public long OrderId { get; set; }
         public string FileName { get; set; } = string.Empty;
+        public List<string> SourceFiles { get; set; } = new();
+        public string SignatureType { get; set; } = "УКЭП";
         public string Snils { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
@@ -59,6 +61,13 @@ namespace TSN_MULTI_API.Core
             var list = LoadHistory();
             list.RemoveAll(x => x.OrderId == record.OrderId);
             list.Insert(0, record);
+            SaveHistory(list);
+        }
+
+        public static void Delete(long orderId)
+        {
+            var list = LoadHistory();
+            list.RemoveAll(x => x.OrderId == orderId);
             SaveHistory(list);
         }
     }

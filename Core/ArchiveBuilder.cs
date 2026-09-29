@@ -7,17 +7,32 @@ using System.Xml;
 
 namespace TSN_MULTI_API.Core;
 
+public enum SignatureType
+{
+    Ukep,
+    Unep
+}
+
+public sealed class ArchiveBuildResult
+{
+    public required byte[] ArchiveBytes { get; init; }
+    public required IReadOnlyDictionary<string, byte[]> Files { get; init; }
+}
+
 public class ArchiveBuilder
 {
     private static readonly TimeZoneInfo MoscowTimeZone =
         TimeZoneInfo.FindSystemTimeZoneById("Russian Standard Time");
 
-    public byte[] BuildArchive(string filePath, string snils, string description, string thumbprint)
+    public ArchiveBuildResult BuildArchive(
+        IReadOnlyCollection<string> filePaths,
+        string snils,
+        string description,
+        string thumbprint,
+        SignatureType signatureType)
     {
-        if (string.IsNullOrWhiteSpace(filePath))
-            throw new ArgumentException("Не указан путь к документу.", nameof(filePath));
-        if (!File.Exists(filePath))
-            throw new FileNotFoundException($"Файл не найден: {filePath}", filePath);
+        if (filePaths.Count is < 1 or > 20)
+            throw new ArgumentException("В пакете должно быть от 1 до 20 документов.", nameof(filePaths));
 
         string cleanSnils = new string((snils ?? string.Empty).Where(char.IsDigit).ToArray());
         if (cleanSnils.Length != 11)
@@ -27,31 +42,49 @@ public class ArchiveBuilder
         if (description.Length == 0)
             throw new ArgumentException("Описание документа не заполнено.", nameof(description));
 
-        string fileName = Path.GetFileName(filePath);
-        byte[] fileBytes = File.ReadAllBytes(filePath);
-        if (fileBytes.Length == 0)
-            throw new InvalidDataException("Выбранный файл пустой.");
-
         // В XSD Госключа Snils задан маской "xxx-xxx-xxx xx". Нельзя передавать
         // только цифры: такая заявка может быть зарегистрирована порталом, но не
         // будет сопоставлена с получателем при обработке Госключом.
         string snilsForRequest = FormatSnils(cleanSnils);
-        byte[] xmlBytes = Encoding.UTF8.GetBytes(GenerateReqXml(snilsForRequest, description));
+        byte[] xmlBytes = Encoding.UTF8.GetBytes(GenerateReqXml(snilsForRequest, description, signatureType));
+        var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["req.xml"] = xmlBytes
+        };
 
-        // Создаём обе подписи через один и тот же CryptoPro-код.
-        byte[] fileSignature = CryptoSigner.SignDetached(fileBytes, thumbprint);
-        byte[] xmlSignature = CryptoSigner.SignDetached(xmlBytes, thumbprint);
+        foreach (string filePath in filePaths)
+        {
+            if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+                throw new FileNotFoundException("Выбранный файл не найден.", filePath);
+
+            string fileName = Path.GetFileName(filePath);
+            if (files.ContainsKey(fileName))
+                throw new ArgumentException($"В пакете повторяется имя файла: {fileName}.", nameof(filePaths));
+
+            byte[] fileBytes = File.ReadAllBytes(filePath);
+            if (fileBytes.Length == 0)
+                throw new InvalidDataException($"Выбранный файл пустой: {fileName}.");
+            files[fileName] = fileBytes;
+        }
+
+        // Тип УНЭП/УКЭП задаёт вид сведений в req.xml и тип подписи
+        // получателя. Все вложения, включая req.xml, по требованиям API
+        // должны сопровождаться УКЭП отправителя.
+        foreach ((string name, byte[] contents) in files.Where(x => !x.Key.EndsWith(".sig", StringComparison.OrdinalIgnoreCase)).ToList())
+            files[$"{name}.sig"] = CryptoSigner.SignDetached(contents, thumbprint);
 
         using var memoryStream = new MemoryStream();
         using (ZipArchive zipArchive = new ZipArchive(memoryStream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            AddFileToZip(zipArchive, fileName, fileBytes);
-            AddFileToZip(zipArchive, $"{fileName}.sig", fileSignature);
-            AddFileToZip(zipArchive, "req.xml", xmlBytes);
-            AddFileToZip(zipArchive, "req.xml.sig", xmlSignature);
+            foreach ((string name, byte[] contents) in files)
+                AddFileToZip(zipArchive, name, contents);
         }
 
-        return memoryStream.ToArray();
+        return new ArchiveBuildResult
+        {
+            ArchiveBytes = memoryStream.ToArray(),
+            Files = files
+        };
     }
 
     private static void AddFileToZip(ZipArchive archive, string entryName, byte[] data)
@@ -64,8 +97,11 @@ public class ArchiveBuilder
     private static string FormatSnils(string digits) =>
         $"{digits[..3]}-{digits.Substring(3, 3)}-{digits.Substring(6, 3)} {digits[9..]}";
 
-    private static string GenerateReqXml(string snils, string description)
+    private static string GenerateReqXml(string snils, string description, SignatureType signatureType)
     {
+        string ns = signatureType == SignatureType.Unep
+            ? "urn://mpkey.gosuslugi.ru/sign_document/1.0.0"
+            : "urn://mpkey.gosuslugi.ru/sign_document_ukep/1.0.0";
         using var stringWriter = new Utf8StringWriter();
         var settings = new XmlWriterSettings
         {
@@ -76,28 +112,27 @@ public class ArchiveBuilder
 
         using (XmlWriter writer = XmlWriter.Create(stringWriter, settings))
         {
-            writer.WriteStartElement("ns", "SignRequest", "urn://mpkey.gosuslugi.ru/sign_document_ukep/1.0.0");
-            writer.WriteElementString("ns", "Snils", "urn://mpkey.gosuslugi.ru/sign_document_ukep/1.0.0", snils);
+            writer.WriteStartElement("ns", "SignRequest", ns);
+            writer.WriteElementString("ns", "Snils", ns, snils);
             writer.WriteElementString(
                 "ns",
                 "SignExpiration",
-                "urn://mpkey.gosuslugi.ru/sign_document_ukep/1.0.0",
+                ns,
                 TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, MoscowTimeZone)
                     .AddHours(23)
                     .ToString("yyyy-MM-dd'T'HH:mm:ss.fffzzz"));
-            writer.WriteElementString("ns", "Description", "urn://mpkey.gosuslugi.ru/sign_document_ukep/1.0.0", description);
+            writer.WriteElementString("ns", "Description", ns, description);
 
-            WriteAttribute(writer, "orgName", "ТСН САПОЖОК");
-            WriteAttribute(writer, "orgINN", "5011013466");
+            WriteAttribute(writer, ns, "orgName", "ТСН САПОЖОК");
+            WriteAttribute(writer, ns, "orgINN", "5011013466");
             writer.WriteEndElement();
         }
 
         return stringWriter.ToString();
     }
 
-    private static void WriteAttribute(XmlWriter writer, string name, string value)
+    private static void WriteAttribute(XmlWriter writer, string ns, string name, string value)
     {
-        const string ns = "urn://mpkey.gosuslugi.ru/sign_document_ukep/1.0.0";
         writer.WriteStartElement("ns", "Attribute", ns);
         writer.WriteElementString("ns", "AttributeName", ns, name);
         writer.WriteElementString("ns", "AttributeValue", ns, value);

@@ -18,6 +18,59 @@ public static class CryptoSigner
     private const string Gost256DigestOid = "1.2.643.7.1.1.2.2";
     private const string Gost512DigestOid = "1.2.643.7.1.1.2.3";
 
+    public static SignatureVerificationResult VerifyDetachedSignature(byte[] content, byte[] signature)
+    {
+        Exception? detachedError = null;
+        try
+        {
+            var cms = new CpSignedCms(new ContentInfo(content), detached: true);
+            cms.Decode(signature);
+            cms.CheckSignature(verifySignatureOnly: true);
+            return DescribeVerifiedCms(cms, "отсоединённая");
+        }
+        catch (Exception ex)
+        {
+            detachedError = ex;
+        }
+
+        try
+        {
+            // Некоторые ответы Госключа содержат присоединённую CAdES/CMS.
+            // Для неё исходный файл не передаётся в конструктор.
+            var cms = new CpSignedCms();
+            cms.Decode(signature);
+            cms.CheckSignature(verifySignatureOnly: true);
+            return DescribeVerifiedCms(cms, "присоединённая");
+        }
+        catch (Exception attachedError)
+        {
+            return new SignatureVerificationResult(
+                false,
+                $"Не прошла проверка ГОСТ/CMS. Detached: {detachedError?.Message}; attached: {attachedError.Message}");
+        }
+    }
+
+    private static SignatureVerificationResult DescribeVerifiedCms(CpSignedCms cms, string cmsType)
+    {
+        if (cms.SignerInfos.Count == 0)
+            return new SignatureVerificationResult(false, "В CMS нет сведений о подписанте.");
+
+        var certificate = cms.SignerInfos[0].Certificate;
+        string signer = certificate?.Subject ?? "Сертификат подписанта не приложен";
+        string validTo = certificate == null ? string.Empty : $"; действует до {certificate.NotAfter:dd.MM.yyyy HH:mm}";
+        string chainStatus = "цепочка сертификата подтверждена";
+        try
+        {
+            cms.CheckSignature(verifySignatureOnly: false);
+        }
+        catch (Exception ex)
+        {
+            chainStatus = $"целостность подтверждена; цепочка сертификата не подтверждена: {ex.Message}";
+        }
+
+        return new SignatureVerificationResult(true, $"{cmsType} CMS, {signer}{validTo}; {chainStatus}");
+    }
+
     public static string NormalizeThumbprint(string? thumbprint)
     {
         if (string.IsNullOrWhiteSpace(thumbprint))
@@ -181,11 +234,6 @@ public static class CryptoSigner
             if (encoded.Length == 0)
                 throw new CryptographicException("CpSignedCms вернул пустую подпись.");
 
-            // Проверяем именно ту detached CMS, которую собираемся отправить.
-            var verifier = new CpSignedCms(new ContentInfo(data), detached: true);
-            verifier.Decode(encoded);
-            verifier.CheckSignature(verifySignatureOnly: true);
-
             return encoded;
         }
         catch (Exception ex) when (ex is CryptographicException || ex is InvalidOperationException)
@@ -209,3 +257,5 @@ public static class CryptoSigner
             .Replace("/", "%2f", StringComparison.Ordinal);
     }
 }
+
+public sealed record SignatureVerificationResult(bool IsValid, string Details);

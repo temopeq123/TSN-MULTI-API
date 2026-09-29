@@ -2,6 +2,7 @@
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -71,7 +72,11 @@ namespace TSN_MULTI_API.Core
                 throw new ArgumentException($"Некорректная ссылка на файл результата: {link}");
             }
 
-            string[] parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            // AbsolutePath preserves %-escapes.  Passing that value to
+            // EscapeDataString below turns "%20" into "%2520", so the storage
+            // service looks for a literal percent sign in the mnemonic.
+            string path = uri.GetComponents(UriComponents.Path, UriFormat.Unescaped);
+            string[] parts = path.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 2)
                 throw new ArgumentException($"Некорректная ссылка на файл результата: {link}");
 
@@ -83,7 +88,12 @@ namespace TSN_MULTI_API.Core
             return (mnemonic, objectType);
         }
 
-        public async Task DownloadResultFileAsync(long currentStatusHistoryId, string fileName, string token, string savePath)
+        public async Task DownloadResultFileAsync(
+            long currentStatusHistoryId,
+            string mnemonic,
+            string token,
+            string savePath,
+            string objectType = "3")
         {
             // Очищаем токен от случайного префикса "Bearer ", если он есть
             if (token.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
@@ -91,9 +101,9 @@ namespace TSN_MULTI_API.Core
                 token = token.Substring(7).Trim();
             }
 
-            string escapedFileName = Uri.EscapeDataString(fileName);
+            string escapedMnemonic = Uri.EscapeDataString(mnemonic);
             string baseUrl = ApiEpguBaseUrl.TrimEnd('/');
-            string url = $"{baseUrl}/files/download/{currentStatusHistoryId}/3?mnemonic={escapedFileName}&eserviceCode=10000000374";
+            string url = $"{baseUrl}/files/download/{currentStatusHistoryId}/{objectType}?mnemonic={escapedMnemonic}&eserviceCode=10000000374";
 
             // 1. Отключаем авто-редирект, чтобы управлять заголовками вручную
             using var handler = new HttpClientHandler { AllowAutoRedirect = false };
