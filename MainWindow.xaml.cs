@@ -23,6 +23,9 @@ namespace TSN_MULTI_API
         private List<AddressBookEntry> _addressBookEntries = new List<AddressBookEntry>();
         private Guid? _editingAddressBookId;
 
+        private SignatureType _selectedSignatureType = SignatureType.Ukep;
+        private long? _selectedOrderId;
+
         private readonly SettingsManager _settingsManager;
         private readonly System.Windows.Threading.DispatcherTimer _pollingTimer;
 
@@ -39,6 +42,7 @@ namespace TSN_MULTI_API
             LoadCertificates();
             LoadAddressBook();
             LoadHistoryToUI();
+            OrdersListView.SelectionChanged += OrdersListView_SelectionChanged;
 
             ShowPanel("goskey");
 
@@ -257,6 +261,14 @@ namespace TSN_MULTI_API
                 TxtDescription.Text = _settingsManager.Current.DefaultDescription;
         }
 
+        private void SignatureType_Checked(object sender, RoutedEventArgs e)
+        {
+            if (RbUnep != null && RbUnep.IsChecked == true)
+                _selectedSignatureType = SignatureType.Unep;
+            else
+                _selectedSignatureType = SignatureType.Ukep;
+        }
+
         private bool _isFormattingAbSnils;
         private void TxtAbSnils_TextChanged(object sender, TextChangedEventArgs e)
         {
@@ -278,9 +290,36 @@ namespace TSN_MULTI_API
 
         private void LoadHistoryToUI()
         {
+            // Preserve previously selected order id (if any)
+            long? previouslySelected = _selectedOrderId;
+
             _ordersList = HistoryManager.LoadHistory();
             OrdersListView.ItemsSource = null;
             OrdersListView.ItemsSource = _ordersList;
+
+            // If there was no selection yet, default to the most recently created order
+            if (!previouslySelected.HasValue && _ordersList.Count > 0)
+            {
+                // Choose by CreatedAt descending to pick the freshest (last sent) record
+                _selectedOrderId = _ordersList.OrderByDescending(o => o.CreatedAt).First().OrderId;
+            }
+
+            // Try to restore selection by id
+            if (_selectedOrderId.HasValue)
+            {
+                OrderRecord? toSelect = _ordersList.FirstOrDefault(o => o.OrderId == _selectedOrderId.Value);
+                if (toSelect != null)
+                {
+                    OrdersListView.SelectedItem = toSelect;
+                    OrdersListView.ScrollIntoView(toSelect);
+                }
+            }
+        }
+
+        private void OrdersListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (OrdersListView.SelectedItem is OrderRecord selected)
+                _selectedOrderId = selected.OrderId;
         }
 
         private void LoadCertificates()
@@ -457,8 +496,8 @@ namespace TSN_MULTI_API
 
             string thumbprint = CertComboBox.SelectedValue.ToString() ?? string.Empty;
             string apiKey = TxtApiKeyBox.Text.Trim();
-            string token = TxtManualTokenBox.Text.Trim();
-            SignatureType signatureType = CmbSignatureType.SelectedIndex == 1 ? SignatureType.Unep : SignatureType.Ukep;
+            string token = string.Empty;
+            SignatureType signatureType = _selectedSignatureType;
 
             try
             {
@@ -498,6 +537,7 @@ namespace TSN_MULTI_API
                     StatusName = "Принята порталом, ожидается обработка"
                 };
 
+                _selectedOrderId = orderId;
                 HistoryManager.AddOrUpdate(record);
                 LoadHistoryToUI();
 
@@ -527,7 +567,7 @@ namespace TSN_MULTI_API
 
             string thumbprint = CertComboBox.SelectedValue?.ToString() ?? string.Empty;
             string apiKey = TxtApiKeyBox.Text.Trim();
-            string token = TxtManualTokenBox.Text.Trim();
+            string token = string.Empty;
 
             try
             {
@@ -553,7 +593,7 @@ namespace TSN_MULTI_API
 
             string thumbprint = CertComboBox.SelectedValue?.ToString() ?? string.Empty;
             string apiKey = TxtApiKeyBox.Text.Trim();
-            string token = TxtManualTokenBox.Text.Trim();
+            string token = string.Empty;
 
             try
             {
@@ -901,7 +941,7 @@ namespace TSN_MULTI_API
 
                 string thumbprint = CertComboBox.SelectedValue?.ToString() ?? string.Empty;
                 string apiKey = TxtApiKeyBox.Text.Trim();
-                string token = TxtManualTokenBox.Text.Trim();
+                string token = string.Empty;
 
                 if (string.IsNullOrEmpty(token))
                 {

@@ -30,7 +30,10 @@ namespace TSN_MULTI_API.Core
             string metaJson = "{\"region\":\"00000000000\", \"serviceCode\":\"10000000374\", \"targetCode\":\"-10000000374\"}";
             content.Add(new StringContent(metaJson, Encoding.UTF8, "application/json"), "meta");
 
-            var fileContent = new ByteArrayContent(archiveBytes);
+            // Stream the archive instead of buffering the whole byte[] into a ByteArrayContent.
+            // This avoids excessive memory usage and enables chunked transfer when Content-Length is unknown.
+            var archiveStream = new MemoryStream(archiveBytes, writable: false);
+            var fileContent = new StreamContent(archiveStream);
             fileContent.Headers.ContentType = MediaTypeHeaderValue.Parse("application/zip");
             content.Add(fileContent, "file", "archive.zip");
 

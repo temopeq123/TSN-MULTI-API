@@ -73,10 +73,10 @@
                             </Grid>
 
                             <TextBlock Text="Тип подписи получателя" FontWeight="SemiBold"/>
-                            <ComboBox x:Name="CmbSignatureType" SelectedIndex="0" Margin="0,6,0,12">
-                                <ComboBoxItem Content="УКЭП — подпись получателя УКЭП"/>
-                                <ComboBoxItem Content="УНЭП — подпись получателя УНЭП"/>
-                            </ComboBox>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,12">
+                                <RadioButton x:Name="RbUkep" Content="УКЭП — подпись получателя УКЭП" GroupName="SignatureTypeGroup" IsChecked="True" Checked="SignatureType_Checked" Margin="0,0,10,0"/>
+                                <RadioButton x:Name="RbUnep" Content="УНЭП — подпись получателя УНЭП" GroupName="SignatureTypeGroup" Checked="SignatureType_Checked"/>
+                            </StackPanel>
 
                             <TextBlock Text="СНИЛС получателя" FontWeight="SemiBold"/>
                             <TextBox x:Name="TxtSnils" MaxLength="14" Margin="0,6,0,12" TextChanged="TxtSnils_TextChanged"/>
@@ -85,13 +85,6 @@
                             <TextBox x:Name="TxtDescription" Margin="0,6,0,16"/>
 
                             <Button Content="Передать заявку в Госключ" Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" Height="38" Click="PushArchiveSmartAsync_Click"/>
-                        </StackPanel>
-                    </GroupBox>
-
-                    <GroupBox Header="Дополнительно (для технического специалиста)">
-                        <StackPanel>
-                            <TextBlock Text="Access Token (если уже есть — можно не заполнять)" FontSize="12" Foreground="{StaticResource MutedTextBrush}"/>
-                            <TextBox x:Name="TxtManualTokenBox" Margin="0,6,0,0"/>
                         </StackPanel>
                     </GroupBox>
 
