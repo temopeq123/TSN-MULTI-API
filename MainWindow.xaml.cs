@@ -651,31 +651,54 @@ namespace TSN_MULTI_API
             foreach (string signaturePath in signatures)
             {
                 string signedFileName = Path.ChangeExtension(Path.GetFileName(signaturePath), null) ?? string.Empty;
-                // Ответ Госключа содержит пару: <имя>.sig и <имя> с
-                // mnemonic ..._attach. Проверяем именно возвращённый файл:
-                // это те же байты, с которыми была сформирована подпись.
-                string contentPath = Path.Combine(receivedDir, signedFileName);
-                if (!File.Exists(contentPath))
-                    contentPath = Path.Combine(saveDir, signedFileName);
-                if (!File.Exists(contentPath))
+
+                string origPath = Path.Combine(saveDir, signedFileName);
+                string dlPath = Path.Combine(receivedDir, signedFileName);
+
+                byte[] signatureBytes = File.ReadAllBytes(signaturePath);
+                bool isVerified = false;
+
+                // 1. Пробуем сверить с оригиналом
+                if (File.Exists(origPath))
                 {
-                    report.AppendLine($"⚠ {Path.GetFileName(signaturePath)}: соответствующий документ не найден.");
-                    continue;
+                    byte[] origBytes = File.ReadAllBytes(origPath);
+                    SignatureVerificationResult resOrig = CryptoSigner.VerifyDetachedSignature(origBytes, signatureBytes);
+                    if (resOrig.IsValid)
+                    {
+                        valid++;
+                        report.AppendLine($"✅ Документ: {signedFileName}");
+                        report.AppendLine($"   {resOrig.Details}");
+                        report.AppendLine(); // Пустая строка для визуального разделения
+                        isVerified = true;
+                    }
                 }
 
-                SignatureVerificationResult result = CryptoSigner.VerifyDetachedSignature(
-                    File.ReadAllBytes(contentPath),
-                    File.ReadAllBytes(signaturePath));
-                if (result.IsValid)
+                // 2. Если с оригиналом не сошлось - пробуем скачанный
+                if (!isVerified && File.Exists(dlPath))
                 {
-                    valid++;
-                    report.AppendLine($"✓ {Path.GetFileName(signaturePath)}: подпись действительна.");
-                    report.AppendLine($"  {result.Details}");
+                    byte[] dlBytes = File.ReadAllBytes(dlPath);
+                    SignatureVerificationResult resDl = CryptoSigner.VerifyDetachedSignature(dlBytes, signatureBytes);
+                    if (resDl.IsValid)
+                    {
+                        valid++;
+                        report.AppendLine($"✅ Документ: {signedFileName} (из загрузок)");
+                        report.AppendLine($"   {resDl.Details}");
+                        report.AppendLine();
+                        isVerified = true;
+                    }
+                    else
+                    {
+                        report.AppendLine($"❌ Документ: {signedFileName}");
+                        report.AppendLine($"   Ошибка: {resDl.Details}");
+                        report.AppendLine();
+                    }
                 }
-                else
+
+                if (!File.Exists(origPath) && !File.Exists(dlPath))
                 {
-                    report.AppendLine($"✗ {Path.GetFileName(signaturePath)}: подпись НЕ прошла проверку.");
-                    report.AppendLine($"  {result.Details}");
+                    report.AppendLine($"⚠️ Документ: {signedFileName}");
+                    report.AppendLine($"   Ошибка: Исходный файл не найден ни в одной из папок.");
+                    report.AppendLine();
                 }
             }
 

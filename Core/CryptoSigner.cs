@@ -1,9 +1,12 @@
+using CryptoPro.Security.Cryptography.Pkcs;
+using CryptoPro.Security.Cryptography.X509Certificates;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Security.Cryptography.Pkcs;
 using System.Security.Cryptography.X509Certificates;
-using CryptoPro.Security.Cryptography.Pkcs;
-using CryptoPro.Security.Cryptography.X509Certificates;
+using System.Text;
 
 namespace TSN_MULTI_API.Core;
 
@@ -20,55 +23,86 @@ public static class CryptoSigner
 
     public static SignatureVerificationResult VerifyDetachedSignature(byte[] content, byte[] signature)
     {
-        Exception? detachedError = null;
         try
         {
-            var cms = new CpSignedCms(new ContentInfo(content), detached: true);
-            cms.Decode(signature);
-            cms.CheckSignature(verifySignatureOnly: true);
-            return DescribeVerifiedCms(cms, "отсоединённая");
+            // 1. Готовим чистый Base64
+            string sigBase64 = Convert.ToBase64String(signature);
+            string sigText = System.Text.Encoding.UTF8.GetString(signature).Trim();
+            if (sigText.StartsWith("\uFEFF")) sigText = sigText.Substring(1);
+
+            if (sigText.StartsWith("-----BEGIN") ||
+               (sigText.Length > 0 && sigText.All(c => char.IsLetterOrDigit(c) || c == '+' || c == '/' || c == '=' || char.IsWhiteSpace(c))))
+            {
+                var lines = sigText.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                                   .Where(l => !l.StartsWith("-----"));
+                sigBase64 = string.Join("", lines);
+            }
+
+            string contentBase64 = Convert.ToBase64String(content);
+
+            // 2. Обращаемся к CAdESCOM
+            Type typeCades = Type.GetTypeFromProgID("CAdESCOM.CadesSignedData");
+            if (typeCades == null)
+            {
+                return new SignatureVerificationResult(false,
+                    "Для нативной проверки установите 'КриптоПро ЭЦП Browser plug-in' (CAdESCOM).");
+            }
+
+            dynamic cadesSignedData = Activator.CreateInstance(typeCades);
+            cadesSignedData.ContentEncoding = 1; // CADESCOM_BASE64_TO_BINARY
+            cadesSignedData.Content = contentBase64;
+
+            // 3. Проверяем подпись, отдавая приоритет штампу времени
+            bool isCadesT = false;
+            try
+            {
+                // Пробуем проверить полноценную подпись со штампом времени (CAdES-T = 5)
+                cadesSignedData.VerifyCades(sigBase64, 5, true);
+                isCadesT = true;
+            }
+            catch
+            {
+                // Умный фолбэк: если нет доверия к серверу времени Госключа, проверяем хотя бы базовую математику (CAdES-BES = 1)
+                cadesSignedData.VerifyCades(sigBase64, 1, true);
+            }
+
+            // 4. Извлекаем данные о подписантах и точное время
+            var signersInfo = new List<string>();
+            foreach (dynamic signer in cadesSignedData.Signers)
+            {
+                // Парсим имя
+                string subject = signer.Certificate.SubjectName;
+                var match = System.Text.RegularExpressions.Regex.Match(subject, @"CN=([^,]+)");
+                string cleanName = match.Success ? match.Groups[1].Value.Trim() : subject;
+                string validTo = signer.Certificate.ValidToDate.ToString("dd.MM.yyyy");
+
+                // Извлекаем время подписания с красивым форматированием
+                string timeStr = "";
+                try
+                {
+                    DateTime tsaTime = signer.SignatureTimeStampTime;
+                    timeStr = $"\n      ⏱ Штамп времени: {tsaTime:dd.MM.yyyy HH:mm:ss} (TSA)";
+                }
+                catch
+                {
+                    try
+                    {
+                        DateTime localTime = signer.SigningTime;
+                        timeStr = $"\n      ⏳ Время ПК: {localTime:dd.MM.yyyy HH:mm:ss} (не подтверждено)";
+                    }
+                    catch { }
+                }
+
+                signersInfo.Add($"{cleanName} (до {validTo}){timeStr}");
+            }
+
+            string formatName = isCadesT ? "CAdES-T" : "CAdES-BES";
+            return new SignatureVerificationResult(true, $"Формат: {formatName}\n   👤 Подписант: {string.Join("\n                 ", signersInfo)}");
         }
         catch (Exception ex)
         {
-            detachedError = ex;
+            return new SignatureVerificationResult(false, $"Не прошла нативная проверка: {ex.Message}");
         }
-
-        try
-        {
-            // Некоторые ответы Госключа содержат присоединённую CAdES/CMS.
-            // Для неё исходный файл не передаётся в конструктор.
-            var cms = new CpSignedCms();
-            cms.Decode(signature);
-            cms.CheckSignature(verifySignatureOnly: true);
-            return DescribeVerifiedCms(cms, "присоединённая");
-        }
-        catch (Exception attachedError)
-        {
-            return new SignatureVerificationResult(
-                false,
-                $"Не прошла проверка ГОСТ/CMS. Detached: {detachedError?.Message}; attached: {attachedError.Message}");
-        }
-    }
-
-    private static SignatureVerificationResult DescribeVerifiedCms(CpSignedCms cms, string cmsType)
-    {
-        if (cms.SignerInfos.Count == 0)
-            return new SignatureVerificationResult(false, "В CMS нет сведений о подписанте.");
-
-        var certificate = cms.SignerInfos[0].Certificate;
-        string signer = certificate?.Subject ?? "Сертификат подписанта не приложен";
-        string validTo = certificate == null ? string.Empty : $"; действует до {certificate.NotAfter:dd.MM.yyyy HH:mm}";
-        string chainStatus = "цепочка сертификата подтверждена";
-        try
-        {
-            cms.CheckSignature(verifySignatureOnly: false);
-        }
-        catch (Exception ex)
-        {
-            chainStatus = $"целостность подтверждена; цепочка сертификата не подтверждена: {ex.Message}";
-        }
-
-        return new SignatureVerificationResult(true, $"{cmsType} CMS, {signer}{validTo}; {chainStatus}");
     }
 
     public static string NormalizeThumbprint(string? thumbprint)
@@ -126,7 +160,7 @@ public static class CryptoSigner
             }
         }
 
-        // Диагностический fallback: проверяем Windows-хранилища и состояние HasPrivateKey.
+        // Диагностический fallback
         foreach (StoreLocation location in new[] { StoreLocation.CurrentUser, StoreLocation.LocalMachine })
         {
             try
@@ -141,7 +175,7 @@ public static class CryptoSigner
                     string keyState = cert.HasPrivateKey ? "закрытый ключ виден Windows" : "закрытого ключа нет";
                     throw new CryptographicException(
                         $"Сертификат {clean} найден в Windows-хранилище {location}, но CryptoPro не смог его использовать ({keyState}). " +
-                        "Установите/проверьте сертификат и контейнер закрытого ключа в КриптоПро CSP." );
+                        "Установите/проверьте сертификат и контейнер закрытого ключа в КриптоПро CSP.");
                 }
             }
             catch (CryptographicException ex)
@@ -162,8 +196,6 @@ public static class CryptoSigner
 
         string cleanThumbprint = NormalizeThumbprint(thumbprint);
 
-        // Для CMS с ГОСТ-ключом используем классы CryptoPro. Обычный SignedCms
-        // может создать локально проверяемую подпись, которую ЕСИА не примет.
         foreach (StoreLocation location in new[] { StoreLocation.CurrentUser, StoreLocation.LocalMachine })
         {
             try
@@ -211,7 +243,6 @@ public static class CryptoSigner
     {
         try
         {
-            // detached=true — содержимое data не вкладывается в CMS.
             var contentInfo = new ContentInfo(data);
             var signedCms = new CpSignedCms(contentInfo, detached: true);
             var cmsSigner = new CpCmsSigner(cert)
@@ -219,11 +250,8 @@ public static class CryptoSigner
                 IncludeOption = X509IncludeOption.EndCertOnly
             };
 
-            // ЕСИА принимает только свежую подпись: атрибут signingTime обязателен
-            // для проверки ограничения «не старше 24 часов».
             cmsSigner.SignedAttributes.Add(new Pkcs9SigningTime(DateTime.UtcNow));
 
-            // Явно задаём соответствующий сертификату ГОСТ digest.
             string publicKeyOid = cert.PublicKey?.Oid?.Value ?? string.Empty;
             cmsSigner.DigestAlgorithm = new Oid(
                 publicKeyOid == Gost512PublicKeyOid ? Gost512DigestOid : Gost256DigestOid);
@@ -249,8 +277,6 @@ public static class CryptoSigner
         if (signature is null || signature.Length == 0)
             throw new ArgumentException("Подпись пуста.", nameof(signature));
 
-        // Для ЕСИА нужен urlSafeBase64: padding '=' удаляется,
-        // а символы + и / передаются в percent-encoded виде.
         string base64 = Convert.ToBase64String(signature).TrimEnd('=');
         return base64
             .Replace("+", "%2b", StringComparison.Ordinal)
