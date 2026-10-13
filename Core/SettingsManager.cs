@@ -16,15 +16,6 @@ namespace TSN_MULTI_API.Core
         public string DefaultCertificateThumbprint { get; set; } = string.Empty;
         public string DefaultApiKey { get; set; } = string.Empty;
         public string DefaultDescription { get; set; } = "Членская книжка ТСН Сапожок";
-
-        public string FsspDeloNum { get; set; } = "";
-        public string FsspSnils { get; set; } = "";
-        public string FsspFullName { get; set; } = "";
-        public string FsspBirthDate { get; set; } = "";
-        public string FsspCompName { get; set; } = "ТСН «Сапожок»";
-        public string FsspCompInn { get; set; } = "";
-        public string FsspCompOgrn { get; set; } = "";
-        public string FsspCompAddress { get; set; } = "";
     }
 
     public class SettingsManager

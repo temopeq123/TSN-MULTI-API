@@ -1,7 +1,7 @@
 ﻿<Window x:Class="TSN_MULTI_API.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="TSN MULTI API — Госключ и ФССП" Height="780" Width="1080" MinHeight="640" MinWidth="900"
+        Title="TSN MULTI API — Госключ" Height="780" Width="1080" MinHeight="640" MinWidth="900"
         WindowStartupLocation="CenterScreen" Background="{StaticResource PageBackgroundBrush}">
 
     <Grid>
@@ -15,12 +15,11 @@
             <DockPanel Margin="16,20">
                 <StackPanel DockPanel.Dock="Top">
                     <TextBlock Text="TSN MULTI API" Foreground="White" FontSize="18" FontWeight="Bold"/>
-                    <TextBlock Text="Работа с Госключом и АПИ" Foreground="#FF94A3B8" FontSize="12" Margin="0,4,0,24"/>
+                    <TextBlock Text="Работа с Госключом" Foreground="#FF94A3B8" FontSize="12" Margin="0,4,0,24"/>
                 </StackPanel>
 
                 <StackPanel>
                     <Button x:Name="BtnNavGoskey" Style="{StaticResource NavButtonStyle}" Content="Отправка в Госключ" Click="NavGoskey_Click"/>
-                    <Button x:Name="BtnNavFssp" Style="{StaticResource NavButtonStyle}" Content="ФССП (Ход ИП)" Click="NavFssp_Click"/>
                     <Button x:Name="BtnNavAddressBook" Style="{StaticResource NavButtonStyle}" Content="Адресная книга" Click="NavAddressBook_Click"/>
                     <Button x:Name="BtnNavSettings" Style="{StaticResource NavButtonStyle}" Content="Настройки" Click="NavSettings_Click"/>
                 </StackPanel>
@@ -80,7 +79,7 @@
                             </StackPanel>
 
                             <TextBlock Text="СНИЛС получателя" FontWeight="SemiBold"/>
-                            <TextBox x:Name="TxtGoskeySnils" MaxLength="14" Margin="0,6,0,12" TextChanged="TxtSnils_TextChanged"/>
+                            <TextBox x:Name="TxtSnils" MaxLength="14" Margin="0,6,0,12" TextChanged="TxtSnils_TextChanged"/>
 
                             <TextBlock Text="Описание документа" FontWeight="SemiBold"/>
                             <TextBox x:Name="TxtDescription" Margin="0,6,0,16"/>
@@ -117,130 +116,6 @@
 
                     <TextBlock Text="Журнал операций" FontWeight="SemiBold" Margin="0,4,0,6"/>
                     <TextBox x:Name="TxtStatus" Height="100" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Background="#FFF8FAFC" FontFamily="Consolas" FontSize="12"/>
-                </StackPanel>
-            </ScrollViewer>
-
-            <!-- === ФССП === -->
-            <ScrollViewer x:Name="PanelFssp" Grid.Row="1" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
-                <StackPanel MaxWidth="820">
-
-                    <!-- ФОРМА ОТПРАВКИ -->
-                    <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="#FFE2E8F0" BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,14">
-                        <StackPanel>
-                            <TextBlock Text="Запрос информации из ФССП" FontSize="16" FontWeight="Bold" Margin="0,0,0,12"/>
-
-                            <Grid Margin="0,0,0,12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                                    <TextBlock Text="Тип запроса" FontWeight="SemiBold"/>
-                                    <ComboBox x:Name="CmbFsspRequestType" Margin="0,6,0,0" SelectionChanged="CmbFsspRequestType_SelectionChanged">
-                                        <ComboBoxItem Tag="CourseIP">Ход ИП</ComboBoxItem>
-                                        <ComboBoxItem Tag="ExistIP" IsSelected="True">Наличие ИП</ComboBoxItem>
-                                    </ComboBox>
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" x:Name="PanelFsspDeloNum" Visibility="Collapsed">
-                                    <TextBlock Text="Номер дела (например, 23545/20/69025-ИП)" FontWeight="SemiBold"/>
-                                    <TextBox x:Name="TxtFsspDeloNum" Margin="0,6,0,0"/>
-                                </StackPanel>
-                            </Grid>
-
-                            <TextBlock Text="СНИЛС заявителя (11 цифр, без тире и пробелов)" FontWeight="SemiBold"/>
-                            <TextBox x:Name="TxtFsspSnils" MaxLength="11" Margin="0,6,0,12"/>
-
-                            <TextBlock Text="ФИО заявителя полностью" FontWeight="SemiBold"/>
-                            <TextBox x:Name="TxtFsspFullName" Margin="0,6,0,12"/>
-
-                            <TextBlock Text="Дата рождения (ГГГГ-ММ-ДД)" FontWeight="SemiBold"/>
-                            <TextBox x:Name="TxtFsspBirthDate" Margin="0,6,0,12"/>
-
-                            <Grid Margin="0,0,0,12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                                    <TextBlock Text="Тип заявителя" FontWeight="SemiBold"/>
-                                    <ComboBox x:Name="CmbFsspApplicantType" Margin="0,6,0,0" SelectionChanged="CmbFsspApplicantType_SelectionChanged">
-                                        <ComboBoxItem Content="Физ. лицо" Tag="FL" IsSelected="True"/>
-                                        <ComboBoxItem Content="Юр. лицо" Tag="UL"/>
-                                    </ComboBox>
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Margin="0,0,10,0">
-                                    <TextBlock Text="Сторона ИП" FontWeight="SemiBold"/>
-                                    <ComboBox x:Name="CmbFsspComplainerType" Margin="0,6,0,0">
-                                        <ComboBoxItem Content="Взыскатель" Tag="1"/>
-                                        <ComboBoxItem Content="Должник" Tag="2" IsSelected="True"/>
-                                    </ComboBox>
-                                </StackPanel>
-                                <StackPanel Grid.Column="2">
-                                    <TextBlock Text="Пол заявителя" FontWeight="SemiBold"/>
-                                    <ComboBox x:Name="CmbFsspGender" Margin="0,6,0,0">
-                                        <ComboBoxItem Content="Мужской" Tag="1" IsSelected="True"/>
-                                        <ComboBoxItem Content="Женский" Tag="2"/>
-                                    </ComboBox>
-                                </StackPanel>
-                            </Grid>
-
-                            <!-- ПАНЕЛЬ ЮРЛИЦА -->
-                            <StackPanel x:Name="PanelFsspLegalEntity" Margin="0,0,0,16" Visibility="Collapsed">
-                                <TextBlock Text="Данные организации" FontWeight="SemiBold" Margin="0,0,0,6"/>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                                        <TextBlock Text="Название (кратко)" FontSize="12" Foreground="{StaticResource MutedTextBrush}"/>
-                                        <TextBox x:Name="TxtFsspCompName" Text="ТСН «Сапожок»" Margin="0,0,0,8"/>
-                                        <TextBlock Text="ИНН" FontSize="12" Foreground="{StaticResource MutedTextBrush}"/>
-                                        <TextBox x:Name="TxtFsspCompInn" Margin="0,0,0,8"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1">
-                                        <TextBlock Text="Адрес (текстом)" FontSize="12" Foreground="{StaticResource MutedTextBrush}"/>
-                                        <TextBox x:Name="TxtFsspCompAddress" Margin="0,0,0,8"/>
-                                        <TextBlock Text="ОГРН" FontSize="12" Foreground="{StaticResource MutedTextBrush}"/>
-                                        <TextBox x:Name="TxtFsspCompOgrn" Margin="0,0,0,8"/>
-                                    </StackPanel>
-                                </Grid>
-                            </StackPanel>
-
-                            <Button x:Name="BtnFsspSend" Content="Отправить запрос в ФССП" Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Left" Height="38" Click="BtnFsspSend_Click"/>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- ИСТОРИЯ ФССП -->
-                    <GroupBox Header="История заявлений ФССП" Margin="0,0,0,14">
-                        <StackPanel>
-                            <TextBlock Text="Статус 3 означает «Услуга оказана», после чего можно скачивать ответ." FontSize="12" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,0,0,10"/>
-
-                            <ListView x:Name="FsspOrdersListView" Height="150" Margin="0,0,0,10">
-                                <ListView.View>
-                                    <GridView>
-                                        <GridViewColumn Header="№ заявки" Width="100" DisplayMemberBinding="{Binding OrderId}"/>
-                                        <GridViewColumn Header="Тип запроса" Width="120" DisplayMemberBinding="{Binding FileName}"/>
-                                        <GridViewColumn Header="СНИЛС" Width="110" DisplayMemberBinding="{Binding Snils}"/>
-                                        <GridViewColumn Header="Дата" Width="130" DisplayMemberBinding="{Binding CreatedAt, StringFormat={}{0:dd.MM.yyyy HH:mm}}"/>
-                                        <GridViewColumn Header="Статус" Width="200" DisplayMemberBinding="{Binding StatusName}"/>
-                                        <GridViewColumn Header="Код" Width="60" DisplayMemberBinding="{Binding StateOrgStatusCode}"/>
-                                    </GridView>
-                                </ListView.View>
-                            </ListView>
-
-                            <StackPanel Orientation="Horizontal">
-                                <Button Content="Проверить статус" Style="{StaticResource SecondaryButtonStyle}" Click="BtnCheckFsspStatus_Click"/>
-                                <Button Content="Скачать ответ" Style="{StaticResource PrimaryButtonStyle}" Margin="10,0,0,0" Click="BtnDownloadFsspResult_Click"/>
-                                <Button Content="Удалить заявку" Style="{StaticResource SecondaryButtonStyle}" Margin="10,0,0,0" Click="BtnDeleteFsspOrder_Click"/>
-                            </StackPanel>
-                        </StackPanel>
-                    </GroupBox>
-
-                    <!-- ЖУРНАЛ -->
-                    <TextBlock Text="Журнал операций ФССП" FontWeight="SemiBold" Margin="0,0,0,6"/>
-                    <TextBox x:Name="TxtFsspStatusLog" Height="150" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Background="#FFF8FAFC" FontFamily="Consolas" FontSize="12"/>
                 </StackPanel>
             </ScrollViewer>
 
